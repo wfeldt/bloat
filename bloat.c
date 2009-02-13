@@ -15,7 +15,11 @@
 #include <linux/fs.h>	/* BLKGETSIZE64 */
 #include <x86emu.h>
 
-#define M x86emu
+
+#define FIRST_DISK	0x80
+#define FIRST_CDROM	0xe0
+#define MAX_DISKS	0x100
+
 
 typedef struct {
   unsigned type;
@@ -31,38 +35,8 @@ typedef struct {
 } ptable_t;
 
 
-#define FIRST_DISK	0x80
-#define FIRST_CDROM	0xe0
-#define MAX_DISKS	0x100
-
-#define MF_USED		1
-#define MF_READ		2
-#define MF_WRITTEN	4
-#define MF_INV_READ	8
-
 typedef struct {
-  unsigned addr;
-  unsigned char data;
-  unsigned char flags;
-} mem_t;
-
-
-typedef struct {
-  struct {
-    mem_t *data;
-    unsigned size;
-    unsigned invalid_read:1;
-    unsigned invalid_write:1;
-  } mem;
-
-  x86emu_t emu;
-
-  unsigned invalid_mem:1;
-
-  char *log;
-
-  unsigned inst_cnt;
-  unsigned inst_max;
+  x86emu_t *emu;
 
   unsigned kbd_cnt;
   unsigned key;
@@ -75,25 +49,15 @@ typedef struct {
     unsigned iv_base;
     int (* iv_funcs[0x100])(void);
   } bios;
-
 } vm_t;
 
 
 void lprintf(const char *format, ...) __attribute__ ((format (printf, 1, 2)));
+void flush_log(char *buf, unsigned size);
 
 void help(void);
+void handle_int(unsigned nr);
 int check_ip(void);
-mem_t *vm_addr(vm_t *vm, unsigned addr);
-unsigned vm_read_byte(vm_t *vm, unsigned addr);
-unsigned vm_read_byte_noerr(vm_t *vm, unsigned addr);
-unsigned vm_read_word(vm_t *vm, unsigned addr);
-unsigned vm_read_dword(vm_t *vm, unsigned addr);
-uint64_t vm_read_qword(vm_t *vm, unsigned addr);
-unsigned vm_read_segofs16(vm_t *vm, unsigned addr);
-void vm_write_byte(vm_t *vm, unsigned addr, unsigned val);
-void vm_write_word(vm_t *vm, unsigned addr, unsigned val);
-void vm_write_dword(vm_t *vm, unsigned addr, unsigned val);
-void vm_write_qword(vm_t *vm, unsigned addr, uint64_t val);
 vm_t *vm_new(void);
 void vm_free(vm_t *vm);
 int vm_run(vm_t *vm);
@@ -108,16 +72,16 @@ int do_int_15(void);
 int do_int_16(void);
 int do_int_19(void);
 void prepare_bios(vm_t *vm);
-void prepare_boot(vm_t *vm);
-int disk_read(vm_t *vm, unsigned addr, unsigned disk, uint64_t sector, unsigned cnt, int log);
-void parse_ptable(vm_t *vm, unsigned addr, ptable_t *ptable, unsigned base, unsigned ext_base, int entries);
+void prepare_boot(x86emu_mem_t *mem);
+int disk_read(x86emu_mem_t *vm, unsigned addr, unsigned disk, uint64_t sector, unsigned cnt, int log);
+void parse_ptable(x86emu_mem_t *vm, unsigned addr, ptable_t *ptable, unsigned base, unsigned ext_base, int entries);
 int guess_geo(ptable_t *ptable, int entries, unsigned *s, unsigned *h);
 void print_ptable_entry(int nr, ptable_t *ptable);
 int is_ext_ptable(ptable_t *ptable);
 ptable_t *find_ext_ptable(ptable_t *ptable, int entries);
-void dump_ptable(vm_t *vm, unsigned disk);
-char *get_screen(vm_t *vm);
-void dump_screen(vm_t *vm);
+void dump_ptable(x86emu_mem_t *vm, unsigned disk);
+char *get_screen(x86emu_mem_t *vm);
+void dump_screen(x86emu_mem_t *vm);
 
 
 struct option options[] = {
@@ -131,13 +95,15 @@ struct option options[] = {
   { "no-show",    1, NULL, 1006 },
   { "feature",    1, NULL, 1007 },
   { "no-feature", 1, NULL, 1008 },
-  { "max-inst",   1, NULL, 1009 },
+  { "max",        1, NULL, 1009 },
+  { "log-size",   1, NULL, 1010 },
   { }
 };
 
 struct {
   unsigned verbose;
   unsigned inst_max;
+  unsigned log_size; 
 
   struct {
     char *dev;
@@ -179,7 +145,8 @@ int main(int argc, char **argv)
   struct stat sbuf;
   uint64_t ul;
   ptable_t ptable[4];
-  vm_t *vm, *vm_0 = vm_new();
+  x86emu_mem_t *vm_0 = x86emu_mem_new();
+  vm_t *vm;
 
   log_file = stdout;
 
@@ -299,6 +266,10 @@ int main(int argc, char **argv)
         opt.inst_max = strtoul(optarg, NULL, 0);
         break;
 
+      case 1010:
+        opt.log_size = strtoul(optarg, NULL, 0);
+        break;
+
       default:
         help();
         return i == 'h' ? 0 : 1;
@@ -393,11 +364,11 @@ int main(int argc, char **argv)
 
   prepare_bios(vm);
 
-  prepare_boot(vm);
+  prepare_boot(vm->emu->mem);
 
   vm_run(vm);
 
-  dump_screen(vm);
+  dump_screen(vm->emu->mem);
 
   return 0;
 }
@@ -413,29 +384,41 @@ void lprintf(const char *format, ...)
 }
 
 
+void flush_log(char *buf, unsigned size)
+{
+  if(!buf || !size || !log_file) return;
+
+  fwrite(buf, size, 1, log_file);
+}
+
+
 void help()
 {
   fprintf(stderr,
     "Boot Loader Test\nusage: bloat options\n"
-    "  --boot device\n"
-    "      boot from 'device'\n"
-    "      'device' is either a number (0-0xff) or one of 'floppy', 'disk' or 'cdrom'\n"
+    "  --boot DEVICE\n"
+    "      boot from DEVICE\n"
+    "      DEVICE is either a number (0-0xff) or one of: floppy, disk, cdrom\n"
     "  --disk device[,heads,sectors]\n"
     "      add hard disk image [with geometry]\n"
     "  --floppy device[,heads,sectors]\n"
     "      add floppy disk image [with geometry]\n"
     "  --cdrom device[,heads,sectors]\n"
     "      add cdrom image [with geometry]\n"
-    "  --show list\n"
+    "  --show LIST\n"
     "      things to log\n"
-    "      'list' is a comma-separated list of 'code', 'regs' or 'rawptable'\n"
-    "  --no-show list\n"
+    "      LIST is a comma-separated list of: code, regs, data, io, acc, rawptable\n"
+    "  --no-show LIST\n"
     "      things not to log (see --show)\n"
-    "  --feature list\n"
+    "  --feature LIST\n"
     "      features to enable\n"
-    "      'list' is a comma-separated list of 'edd'\n"
-    "  --no-feature list\n"
+    "      LIST is a comma-separated list of: edd\n"
+    "  --no-feature LIST\n"
     "      features to disable (see --features)\n"
+    "  --max N\n"
+    "      stop after N instructions\n"
+    "  --log-size N\n"
+    "      internal log buffer size\n"
     "  --help\n"
     "      show this text\n"
     "examples:\n"
@@ -443,212 +426,6 @@ void help()
     "  bloat --disk linux.img\n"
     "  bloat --cdrom foo.iso --show code,regs\n"
   );
-}
-
-
-unsigned vm_memio(u32 addr, u32 *val, unsigned type)
-{
-  vm_t *vm = x86emu.private;
-  unsigned err = 0, bits = type & 0xff;
-
-  type &= ~0xff;
-
-  switch(type) {
-    case X86EMU_MEMIO_R:
-      vm->mem.invalid_read = 0;
-      switch(bits) {
-        case X86EMU_MEMIO_8:
-          *val = vm_read_byte(vm, addr);
-          break;
-        case X86EMU_MEMIO_16:
-          *val = vm_read_word(vm, addr);
-          break;
-        case X86EMU_MEMIO_32:
-          *val = vm_read_dword(vm, addr);
-          break;
-      }
-      err = vm->mem.invalid_read;
-      break;
-
-    case X86EMU_MEMIO_W:
-      switch(bits) {
-        case X86EMU_MEMIO_8:
-          vm_write_byte(vm, addr, *val);
-          break;
-        case X86EMU_MEMIO_16:
-          vm_write_word(vm, addr, *val);
-          break;
-        case X86EMU_MEMIO_32:
-          vm_write_dword(vm, addr, *val);
-          break;
-      }
-      err = vm->mem.invalid_write;
-      if(vm->mem.invalid_write) x86emu_stop();
-      break;
-
-    case X86EMU_MEMIO_X:
-      vm->mem.invalid_read = 0;
-      switch(bits) {
-        case X86EMU_MEMIO_8:
-          *val = vm_read_byte(vm, addr);
-          break;
-        case X86EMU_MEMIO_16:
-          *val = vm_read_word(vm, addr);
-          break;
-        case X86EMU_MEMIO_32:
-          *val = vm_read_dword(vm, addr);
-          break;
-      }
-      err = vm->mem.invalid_read;
-      break;
-
-    case X86EMU_MEMIO_I:
-      switch(bits) {
-        case X86EMU_MEMIO_8:
-          *val = 0xff;
-          break;
-        case X86EMU_MEMIO_16:
-          *val = 0xffff;
-          break;
-        case X86EMU_MEMIO_32:
-          *val = 0xffffffff;
-          break;
-      }
-      break;
-
-    case X86EMU_MEMIO_O:
-      break;
-  }
-
-  return err;
-}
-
-
-mem_t *vm_addr(vm_t *vm, unsigned addr)
-{
-  unsigned u, u0;
-
-  u0 = (addr * 541 + (addr << 16)) % vm->mem.size;
-
-  for(u = u0; u < vm->mem.size; u++) {
-    if(
-      ((vm->mem.data[u].flags & MF_USED) && vm->mem.data[u].addr == addr) ||
-      !(vm->mem.data[u].flags & MF_USED)
-    ) return vm->mem.data + u;
-  }
-
-  for(u = 0; u < u0; u++) {
-    if(
-      ((vm->mem.data[u].flags & MF_USED) && vm->mem.data[u].addr == addr) ||
-      !(vm->mem.data[u].flags & MF_USED)
-    ) return vm->mem.data + u;
-  }
-
-  return NULL;
-}
-
-
-unsigned vm_read_byte(vm_t *vm, unsigned addr)
-{
-  mem_t *mem = vm_addr(vm, addr);
-
-  if(!mem) {
-    x86emu_log("# oops: read [%08x]: out of memory\n", addr);
-    vm->mem.invalid_read = 1;
-
-    return 0xff;
-  }
-
-  mem->flags |= MF_USED + MF_READ;
-  mem->addr = addr;
-
-  if(!(mem->flags & MF_WRITTEN)) {
-    mem->flags |= MF_INV_READ;
-    vm->mem.invalid_read = 1;
-    if(opt.verbose >= 1) x86emu_log("# r [%08x] = undef\n", addr);
-  }
-
-  if(opt.verbose >= 2) {
-    x86emu_log("# r [%08x] = %02x\n", addr, mem->data);
-  }
-
-  return mem->data;
-}
-
-
-unsigned vm_read_byte_noerr(vm_t *vm, unsigned addr)
-{
-  mem_t *mem = vm_addr(vm, addr);
-
-  return mem ? mem->data : 0xff;
-}
-
-
-unsigned vm_read_word(vm_t *vm, unsigned addr)
-{
-  return vm_read_byte(vm, addr) + (vm_read_byte(vm, addr + 1) << 8);
-}
-
-
-unsigned vm_read_dword(vm_t *vm, unsigned addr)
-{
-  return vm_read_word(vm, addr) + (vm_read_word(vm, addr + 2) << 16);
-}
-
-
-uint64_t vm_read_qword(vm_t *vm, unsigned addr)
-{
-  return vm_read_dword(vm, addr) + ((uint64_t) vm_read_dword(vm, addr + 4) << 32);
-
-}
-
-
-unsigned vm_read_segofs16(vm_t *vm, unsigned addr)
-{
-  return vm_read_word(vm, addr) + (vm_read_word(vm, addr + 2) << 4);
-}
-
-
-void vm_write_byte(vm_t *vm, unsigned addr, unsigned val)
-{
-  mem_t *mem = vm_addr(vm, addr);
-
-  if(!mem) {
-    lprintf("*oops*: write [0x%08x]: out of memory\n", addr);
-    vm->mem.invalid_write = 1;
-
-    return;
-  }
-
-  mem->flags |= MF_USED + MF_WRITTEN;
-  mem->addr = addr;
-
-  mem->data = val;
-
-  if(opt.verbose >= 2) {
-    x86emu_log("# w [%08x] = %02x\n", addr, mem->data);
-  }
-}
-
-
-void vm_write_word(vm_t *vm, unsigned addr, unsigned val)
-{
-  vm_write_byte(vm, addr, val);
-  vm_write_byte(vm, addr + 1, val >> 8);
-}
-
-
-void vm_write_dword(vm_t *vm, unsigned addr, unsigned val)
-{
-  vm_write_word(vm, addr, val);
-  vm_write_word(vm, addr + 2, val >> 16);
-}
-
-
-void vm_write_qword(vm_t *vm, unsigned addr, uint64_t val)
-{
-  vm_write_dword(vm, addr, val);
-  vm_write_dword(vm, addr + 4, val >> 32);
 }
 
 
@@ -664,15 +441,12 @@ unsigned cs2c(unsigned cs)
 }
 
 
-void handle_int(unsigned nr);
-
 int check_ip()
 {
   vm_t *vm = x86emu.private;
+  x86emu_mem_t *mem = x86emu.mem;
   unsigned u, u1, u_m1, u2;
   int abort = 0;
-
-  vm->inst_cnt++;
 
   u = x86emu.x86.R_CS_BASE + x86emu.x86.R_EIP;
 
@@ -680,16 +454,9 @@ int check_ip()
     handle_int(u - vm->bios.iv_base);
   }
 
-#if 0
-  if(u >= vm.mem_size || !vm.mem_mask[u]) {
-    printf("  instruction fetch at uninitialized memory\n");
-    abort = 1;
-  }
-#endif
-
-  if(vm_read_byte_noerr(vm, u) == 0xeb) {
-    u1 = vm_read_byte_noerr(vm, u + 1);
-    u_m1 = vm_read_byte_noerr(vm, u - 1);
+  if(vm_read_byte_noerr(mem, u) == 0xeb) {
+    u1 = vm_read_byte_noerr(mem, u + 1);
+    u_m1 = vm_read_byte_noerr(mem, u - 1);
     if(
       u1 == 0xfe ||
       (u1 == 0xfd && u >= 1 && (u_m1 == 0xfb || u_m1 == 0xfa))
@@ -699,22 +466,14 @@ int check_ip()
     }
   }
 
-  if(vm_read_byte_noerr(vm, u) == 0xe9) {
-    u1 = vm_read_byte_noerr(vm, u + 1);
-    u2 = vm_read_byte_noerr(vm, u + 2);
+  if(vm_read_byte_noerr(mem, u) == 0xe9) {
+    u1 = vm_read_byte_noerr(mem, u + 1);
+    u2 = vm_read_byte_noerr(mem, u + 2);
     if(u1 == 0xfd && u2 == 0xff) {
       x86emu_log("* loop detected\n");
       abort = 1;
     }
   }
-
-  if(vm->inst_cnt >= vm->inst_max) {
-    x86emu_log("* too many instructions\n");
-    abort = 1;
-  }
-
-  lprintf("%s", x86emu_get_log());
-  x86emu_clear_log();
 
   return abort;
 }
@@ -723,6 +482,7 @@ int check_ip()
 void handle_int(unsigned nr)
 {
   vm_t *vm = x86emu.private;
+  x86emu_mem_t *mem = x86emu.mem;
   int stop = 0;
   u8 flags;
 
@@ -733,7 +493,7 @@ void handle_int(unsigned nr)
   else {
     stop = vm->bios.iv_funcs[nr]();
     flags = x86emu.x86.R_FLG;
-    vm_write_byte(vm, x86emu.x86.R_SS_BASE + ((x86emu.x86.R_SP + 4) & 0xffff), flags);
+    vm_write_byte(mem, x86emu.x86.R_SS_BASE + ((x86emu.x86.R_SP + 4) & 0xffff), flags);
   }
 
   if(stop) x86emu_stop();
@@ -760,7 +520,7 @@ int do_int(u8 num, unsigned type)
 
 int do_int_10()
 {
-  vm_t *vm = x86emu.private;
+  x86emu_mem_t *mem = x86emu.mem;
   unsigned u, cnt, attr;
   unsigned cur_x, cur_y, page;
   unsigned x, y, x0, y0, x1, y1, width, d;
@@ -775,15 +535,15 @@ int do_int_10()
       printf("int 0x10: ah 0x%02x (set cursor)\n", x86emu.x86.R_AH);
       printf("(x, y) = (%u, %u)\n", x86emu.x86.R_DL, x86emu.x86.R_DH);
       page = x86emu.x86.R_BH & 7;
-      vm_write_byte(vm, 0x450 + 2 * page, x86emu.x86.R_DL);	// x
-      vm_write_byte(vm, 0x451 + 2 * page, x86emu.x86.R_DH);	// y
+      vm_write_byte(mem, 0x450 + 2 * page, x86emu.x86.R_DL);	// x
+      vm_write_byte(mem, 0x451 + 2 * page, x86emu.x86.R_DH);	// y
       break;
 
     case 0x03:
       printf("int 0x10: ah 0x%02x (get cursor)\n", x86emu.x86.R_AH);
       page = x86emu.x86.R_BH & 7;
-      x86emu.x86.R_DL = vm_read_byte(vm, 0x450 + 2 * page);	// x
-      x86emu.x86.R_DH = vm_read_byte(vm, 0x451 + 2 * page);	// y
+      x86emu.x86.R_DL = vm_read_byte(mem, 0x450 + 2 * page);	// x
+      x86emu.x86.R_DH = vm_read_byte(mem, 0x451 + 2 * page);	// y
       x86emu.x86.R_CX = 0x607;					// cursor shape
       printf("(x, y) = (%u, %u)\n", x86emu.x86.R_DL, x86emu.x86.R_DH);
       break;
@@ -797,29 +557,29 @@ int do_int_10()
       y1 = x86emu.x86.R_DH;
       d = x86emu.x86.R_AL;
       printf("  window (%u, %u) - (%u, %u), by %u lines\n", x0, y0, x1, y1, d);
-      width = vm_read_byte(vm, 0x44a);
+      width = vm_read_byte(mem, 0x44a);
       if(x0 > width) x0 = width;
       if(x1 > width) x1 = width;
-      u = vm_read_byte(vm, 0x484);
+      u = vm_read_byte(mem, 0x484);
       if(y0 > u) y0 = u;
       if(y1 > u) y1 = u;
       if(y1 > y0 && x1 > x0) {
         if(d == 0) {
           for(y = y0; y <= y1; y++) {
             for(x = x0; x < x1; x++) {
-              vm_write_word(vm, 0xb8000 + 2 * (x + width * y), attr);
+              vm_write_word(mem, 0xb8000 + 2 * (x + width * y), attr);
             }
           }
         }
         else {
           for(y = y0; y < y1; y++) {
             for(x = x0; x < x1; x++) {
-              u = vm_read_word(vm, 0xb8000 + 2 * (x + width * (y + 1)));
-              vm_write_word(vm, 0xb8000 + 2 * (x + width * y), u);
+              u = vm_read_word(mem, 0xb8000 + 2 * (x + width * (y + 1)));
+              vm_write_word(mem, 0xb8000 + 2 * (x + width * y), u);
             }
           }
           for(x = x0; x < x1; x++) {
-            vm_write_word(vm, 0xb8000 + 2 * (x + width * y), attr);
+            vm_write_word(mem, 0xb8000 + 2 * (x + width * y), attr);
           }
         }
       }
@@ -831,12 +591,12 @@ int do_int_10()
       attr = x86emu.x86.R_BL;
       page = x86emu.x86.R_BH & 7;
       cnt = x86emu.x86.R_CX;
-      cur_x = vm_read_byte(vm, 0x450 + 2 * page);
-      cur_y = vm_read_byte(vm, 0x451 + 2 * page);
+      cur_x = vm_read_byte(mem, 0x450 + 2 * page);
+      cur_y = vm_read_byte(mem, 0x451 + 2 * page);
       printf("char 0x%02x '%c', attr 0x%02x, cnt %u\n", u, u >= 0x20 && u < 0x7f ? u : ' ', attr, cnt);
       while(cnt--) {
-        vm_write_byte(vm, 0xb8000 + 2 * (cur_x + 80 * cur_y), u);
-        vm_write_byte(vm, 0xb8001 + 2 * (cur_x + 80 * cur_y), attr);
+        vm_write_byte(mem, 0xb8000 + 2 * (cur_x + 80 * cur_y), u);
+        vm_write_byte(mem, 0xb8001 + 2 * (cur_x + 80 * cur_y), attr);
         cur_x++;
       }
       break;
@@ -845,8 +605,8 @@ int do_int_10()
       printf("int 0x10: ah 0x%02x (tty print)\n", x86emu.x86.R_AH);
       u = x86emu.x86.R_AL;
       page = x86emu.x86.R_BH & 7;
-      cur_x = vm_read_byte(vm, 0x450 + 2 * page);
-      cur_y = vm_read_byte(vm, 0x451 + 2 * page);
+      cur_x = vm_read_byte(mem, 0x450 + 2 * page);
+      cur_y = vm_read_byte(mem, 0x451 + 2 * page);
       printf("char 0x%02x '%c'\n", u, u >= 0x20 && u < 0x7f ? u : ' ');
       if(u == 0x0d) {
         cur_x = 0;
@@ -855,21 +615,21 @@ int do_int_10()
         cur_y++;
       }
       else {
-        vm_write_byte(vm, 0xb8000 + 2 * (cur_x + 80 * cur_y), u);
-        vm_write_byte(vm, 0xb8001 + 2 * (cur_x + 80 * cur_y), 7);
+        vm_write_byte(mem, 0xb8000 + 2 * (cur_x + 80 * cur_y), u);
+        vm_write_byte(mem, 0xb8001 + 2 * (cur_x + 80 * cur_y), 7);
         cur_x++;
         if(cur_x == 80) {
           cur_x = 0;
           cur_y++;
         }
       }
-      vm_write_byte(vm, 0x450 + 2 * page, cur_x);
-      vm_write_byte(vm, 0x451 + 2 * page, cur_y);
+      vm_write_byte(mem, 0x450 + 2 * page, cur_x);
+      vm_write_byte(mem, 0x451 + 2 * page, cur_y);
       break;
 
     case 0x0f:
-      x86emu.x86.R_AL = vm_read_byte(vm, 0x449);	// vide mode
-      x86emu.x86.R_AH = vm_read_byte(vm, 0x44a);	// screen width
+      x86emu.x86.R_AL = vm_read_byte(mem, 0x449);	// vide mode
+      x86emu.x86.R_AH = vm_read_byte(mem, 0x44a);	// screen width
       x86emu.x86.R_BH = 0;				// active page
       break;
 
@@ -894,10 +654,10 @@ int do_int_11()
 
 int do_int_12()
 {
-  vm_t *vm = x86emu.private;
+  x86emu_mem_t *mem = x86emu.mem;
 
   printf("int 0x12: (get base mem size)\n");
-  x86emu.x86.R_AX = vm_read_word(vm, 0x413);
+  x86emu.x86.R_AX = vm_read_word(mem, 0x413);
   printf("base mem size: %u kB\n", x86emu.x86.R_AX);
 
   return 0;
@@ -906,7 +666,7 @@ int do_int_12()
 
 int do_int_13()
 {
-  vm_t *vm = x86emu.private;
+  x86emu_mem_t *mem = x86emu.mem;
   unsigned u, disk, cnt, sector, cylinder, head, addr;
   uint64_t ul;
   int i, j;
@@ -947,7 +707,7 @@ int do_int_13()
           break;
         }
         ul = (cylinder * opt.disk[disk].heads + head) * opt.disk[disk].sectors + sector - 1;
-        i = disk_read(vm, addr, disk, ul, cnt, 1);
+        i = disk_read(mem, addr, disk, ul, cnt, 1);
         if(i) {
           x86emu.x86.R_AH = 0x04;
           SET_FLAG(F_CF);
@@ -1005,33 +765,33 @@ int do_int_13()
       disk = x86emu.x86.R_DL;
       addr = (x86emu.x86.R_DS << 4) + x86emu.x86.R_SI;
       printf("drive 0x%02x, request packet:\n0x%05x: ", disk, addr);
-      j = vm_read_byte(vm, addr);
+      j = vm_read_byte(mem, addr);
       j = j == 0x10 || j == 0x18 ? j : 0x10;
       for(i = 0; i < j; i++) {
-        printf("%02x%c", vm_read_byte(vm, addr + i), i == j - 1 ? '\n' : ' ');
+        printf("%02x%c", vm_read_byte(mem, addr + i), i == j - 1 ? '\n' : ' ');
       }
       if(
         !opt.feature.edd || disk >= MAX_DISKS || !opt.disk[disk].dev ||
-        (vm_read_byte(vm, addr) != 0x10 && vm_read_byte(vm, addr) != 0x18)
+        (vm_read_byte(mem, addr) != 0x10 && vm_read_byte(mem, addr) != 0x18)
       ) {
         x86emu.x86.R_AH = 1;
         SET_FLAG(F_CF);
         break;
       }
-      cnt = vm_read_word(vm, addr + 2);
-      u = vm_read_dword(vm, addr + 4);
-      ul = vm_read_qword(vm, addr + 8);
-      if(vm_read_byte(vm, addr) == 0x18 && u == 0xffffffff) {
-        u = vm_read_dword(vm, addr + 0x10);
+      cnt = vm_read_word(mem, addr + 2);
+      u = vm_read_dword(mem, addr + 4);
+      ul = vm_read_qword(mem, addr + 8);
+      if(vm_read_byte(mem, addr) == 0x18 && u == 0xffffffff) {
+        u = vm_read_dword(mem, addr + 0x10);
       }
       else {
-        u = vm_read_segofs16(vm, addr + 4);
+        u = vm_read_segofs16(mem, addr + 4);
       }
       if(disk >= FIRST_CDROM) {
         ul <<= 2;
         cnt <<= 2;
       }
-      i = disk_read(vm, u, disk, ul, cnt, 1);
+      i = disk_read(mem, u, disk, ul, cnt, 1);
       if(i) {
         x86emu.x86.R_AH = 0x04;
         SET_FLAG(F_CF);
@@ -1060,13 +820,13 @@ int do_int_13()
 
       u = x86emu.x86.R_DS_BASE + x86emu.x86.R_SI;
 
-      vm_write_word(vm, u, 0x1a);	// buffer size
-      vm_write_word(vm, u + 2, 3);
-      vm_write_dword(vm, u + 4, opt.disk[disk].cylinders);
-      vm_write_dword(vm, u + 8, opt.disk[disk].heads);
-      vm_write_dword(vm, u + 0xc, opt.disk[disk].sectors);
-      vm_write_qword(vm, u + 0x10, opt.disk[disk].size);
-      vm_write_word(vm, u + 0x18, 0x200);	// sector size
+      vm_write_word(mem, u, 0x1a);	// buffer size
+      vm_write_word(mem, u + 2, 3);
+      vm_write_dword(mem, u + 4, opt.disk[disk].cylinders);
+      vm_write_dword(mem, u + 8, opt.disk[disk].heads);
+      vm_write_dword(mem, u + 0xc, opt.disk[disk].sectors);
+      vm_write_qword(mem, u + 0x10, opt.disk[disk].size);
+      vm_write_word(mem, u + 0x18, 0x200);	// sector size
       break;
 
     case 0x4b:
@@ -1096,6 +856,7 @@ int do_int_13()
 int do_int_15()
 {
   vm_t *vm = x86emu.private;
+  x86emu_mem_t *mem = x86emu.mem;
   unsigned u, u1;
 
   switch(x86emu.x86.R_AH) {
@@ -1172,9 +933,9 @@ int do_int_15()
           x86emu.x86.R_EBX = 0;
           x86emu.x86.R_ECX = 20;
           u1 = x86emu.x86.R_ES_BASE + x86emu.x86.R_DI;
-          vm_write_qword(vm, u1, 0);
-          vm_write_qword(vm, u1 + 8, (uint64_t) u << 20);
-          vm_write_dword(vm, u1 + 0x10, 1);
+          vm_write_qword(mem, u1, 0);
+          vm_write_qword(mem, u1 + 8, (uint64_t) u << 20);
+          vm_write_dword(mem, u1 + 0x10, 1);
           printf("mem size: %u MB\n", u);
           CLEAR_FLAG(F_CF);
         }
@@ -1253,20 +1014,20 @@ vm_t *vm_new()
 
   vm = calloc(1, sizeof *vm);
 
-  // 1299709, 86028121, 179424673
-  vm->mem.size = 15485863;
-  vm->mem.data = calloc(vm->mem.size, sizeof *vm->mem.data);
+  vm->emu = x86emu_new();
+  vm->emu->private = vm;
 
-  vm->emu.private = vm;
+  x86emu_set_log(vm->emu, opt.log_size ?: 10000000, flush_log);
+  if(opt.show.regs) vm->emu->log.regs = 1;
+  if(opt.show.code) vm->emu->log.code = 1;
+  if(opt.show.data) vm->emu->log.data = 1;
+  if(opt.show.acc) vm->emu->log.acc = 1;
+  if(opt.show.io) vm->emu->log.io = 1;
+  if(opt.show.intr) vm->emu->log.intr = 1;
 
-  x86emu_set_memio_func(&vm->emu, vm_memio);
+  for(u = 0; u < 0x100; u++) x86emu_set_intr_func(vm->emu, u, do_int);
 
-  for(u = 0; u < 0x100; u++) x86emu_set_intr_func(&vm->emu, u, do_int);
-  x86emu_set_code_check(&vm->emu, check_ip);
-
-  x86emu_set_log(&vm->emu, vm->log = malloc(100000), 100000);
-
-  x86emu_reset(&vm->emu);
+  x86emu_set_code_check(vm->emu, check_ip);
 
   return vm;
 }
@@ -1274,7 +1035,6 @@ vm_t *vm_new()
 
 void vm_free(vm_t *vm)
 {
-  free(vm->mem.data);
   free(vm);
 }
 
@@ -1283,30 +1043,18 @@ int vm_run(vm_t *vm)
 {
   int ok = 1;
 
-  if(opt.show.regs) vm->emu.log.regs = 1;
-  if(opt.show.code) vm->emu.log.code = 1;
-  if(opt.show.data) vm->emu.log.data = 1;
-  if(opt.show.acc) vm->emu.log.acc = 1;
-  if(opt.show.io) vm->emu.log.io = 1;
-  if(opt.show.intr) vm->emu.log.intr = 1;
+  vm->emu->x86.tsc = 0;
+  vm->emu->x86.tsc_max = opt.inst_max;
+  vm->emu->x86.R_DL = opt.boot;
 
-  vm->inst_cnt = 0;
-  vm->inst_max = opt.inst_max;
+  if(vm_read_word(vm->emu->mem, 0x7c00) == 0) return ok;
 
-  vm->emu.x86.R_DL = opt.boot;
+  x86emu_exec(vm->emu);
 
-  if(vm_read_word(vm, 0x7c00) == 0) return ok;
+  x86emu_clear_log(vm->emu, 1);
+  x86emu_clear_log(vm->emu, 0);
 
-  memcpy(&x86emu, &vm->emu, sizeof x86emu);
-
-  x86emu_exec();
-
-  lprintf("%s", x86emu_get_log());
-  x86emu_clear_log();
-
-  memcpy(&vm->emu, &x86emu, sizeof vm->emu);
-
-  if(vm->mem.invalid_write) ok = 0;
+  if(vm->emu->mem->invalid_write) ok = 0;
 
   return ok;
 }
@@ -1315,69 +1063,70 @@ int vm_run(vm_t *vm)
 void prepare_bios(vm_t *vm)
 {
   unsigned u;
+  x86emu_mem_t *mem = vm->emu->mem;
 
   vm->memsize = 1024;	// 1GB RAM
 
   // jmp far 0:0x7c00
-  vm_write_byte(vm, 0xffff0, 0xea);
-  vm_write_word(vm, 0xffff1, 0x7c00);
-  vm_write_word(vm, 0xffff3, 0x0000);
+  vm_write_byte(mem, 0xffff0, 0xea);
+  vm_write_word(mem, 0xffff1, 0x7c00);
+  vm_write_word(mem, 0xffff3, 0x0000);
 
-  vm_write_word(vm, 0x413, 640);	// mem size in kB
-  vm_write_byte(vm, 0x449, 3);		// video mode
-  vm_write_byte(vm, 0x44a, 80);		// columns
-  vm_write_byte(vm, 0x484, 24);		// rows - 1
-  vm_write_byte(vm, 0x485, 16);		// char height
-  vm_write_byte(vm, 0x462, 0);		// current text page
-  vm_write_word(vm, 0x450, 0);		// page 0 cursor pos
+  vm_write_word(mem, 0x413, 640);	// mem size in kB
+  vm_write_byte(mem, 0x449, 3);		// video mode
+  vm_write_byte(mem, 0x44a, 80);		// columns
+  vm_write_byte(mem, 0x484, 24);		// rows - 1
+  vm_write_byte(mem, 0x485, 16);		// char height
+  vm_write_byte(mem, 0x462, 0);		// current text page
+  vm_write_word(mem, 0x450, 0);		// page 0 cursor pos
 
-  vm_write_dword(vm, 0x46c, 0);		// time
+  vm_write_dword(mem, 0x46c, 0);		// time
 
   vm->bios.iv_base = 0xf8000 + 0x100;
   for(u = 0; u < 0x100; u++) {
-    vm_write_byte(vm, vm->bios.iv_base + u, 0xcf);	// iret
+    vm_write_byte(mem, vm->bios.iv_base + u, 0xcf);	// iret
   }
 
-  vm_write_word(vm, 0x10*4, 0x100 + 0x10);
-  vm_write_word(vm, 0x10*4+2, 0xf800);
+  vm_write_word(mem, 0x10*4, 0x100 + 0x10);
+  vm_write_word(mem, 0x10*4+2, 0xf800);
   vm->bios.iv_funcs[0x10] = do_int_10;
 
-  vm_write_word(vm, 0x11*4, 0x100 + 0x11);
-  vm_write_word(vm, 0x11*4+2, 0xf800);
+  vm_write_word(mem, 0x11*4, 0x100 + 0x11);
+  vm_write_word(mem, 0x11*4+2, 0xf800);
   vm->bios.iv_funcs[0x11] = do_int_11;
 
-  vm_write_word(vm, 0x12*4, 0x100 + 0x12);
-  vm_write_word(vm, 0x12*4+2, 0xf800);
+  vm_write_word(mem, 0x12*4, 0x100 + 0x12);
+  vm_write_word(mem, 0x12*4+2, 0xf800);
   vm->bios.iv_funcs[0x12] = do_int_12;
 
-  vm_write_word(vm, 0x13*4, 0x100 + 0x13);
-  vm_write_word(vm, 0x13*4+2, 0xf800);
+  vm_write_word(mem, 0x13*4, 0x100 + 0x13);
+  vm_write_word(mem, 0x13*4+2, 0xf800);
   vm->bios.iv_funcs[0x13] = do_int_13;
 
-  vm_write_word(vm, 0x15*4, 0x100 + 0x15);
-  vm_write_word(vm, 0x15*4+2, 0xf800);
+  vm_write_word(mem, 0x15*4, 0x100 + 0x15);
+  vm_write_word(mem, 0x15*4+2, 0xf800);
   vm->bios.iv_funcs[0x15] = do_int_15;
 
-  vm_write_word(vm, 0x16*4, 0x100 + 0x16);
-  vm_write_word(vm, 0x16*4+2, 0xf800);
+  vm_write_word(mem, 0x16*4, 0x100 + 0x16);
+  vm_write_word(mem, 0x16*4+2, 0xf800);
   vm->bios.iv_funcs[0x16] = do_int_16;
 
-  vm_write_word(vm, 0x19*4, 0x100 + 0x19);
-  vm_write_word(vm, 0x19*4+2, 0xf800);
+  vm_write_word(mem, 0x19*4, 0x100 + 0x19);
+  vm_write_word(mem, 0x19*4+2, 0xf800);
   vm->bios.iv_funcs[0x19] = do_int_19;
 }
 
 
-int el_torito_boot(vm_t *vm, unsigned disk)
+int el_torito_boot(x86emu_mem_t *mem, unsigned disk)
 {
   unsigned char sector[2048];
   unsigned et, u;
   unsigned start, load_len, load_addr;
   int ok = 0;
 
-  disk_read(vm, 0x7c00, disk, 0x11 * 4, 4, 1);	/* 1 sector from 0x8800 */
+  disk_read(mem, 0x7c00, disk, 0x11 * 4, 4, 1);	/* 1 sector from 0x8800 */
   for(u = 0; u < 2048; u++) {
-    sector[u] = vm_read_byte_noerr(vm, 0x7c00 + u);
+    sector[u] = vm_read_byte_noerr(mem, 0x7c00 + u);
   }
 
   if(
@@ -1387,19 +1136,19 @@ int el_torito_boot(vm_t *vm, unsigned disk)
   ) {
     et = sector[0x47] + (sector[0x48] << 8) + (sector[0x49] << 16) + (sector[0x4a] << 24);
     lprintf("el_torito_boot: boot catalog at 0x%04x\n", et);
-    if(!disk_read(vm, 0x7c00, disk, et * 4, 4, 1)) {
-      if(vm_read_byte_noerr(vm, 0x7c20) == 0x88) {	/* bootable */
-        load_addr = vm_read_word(vm, 0x7c22) << 4;
+    if(!disk_read(mem, 0x7c00, disk, et * 4, 4, 1)) {
+      if(vm_read_byte_noerr(mem, 0x7c20) == 0x88) {	/* bootable */
+        load_addr = vm_read_word(mem, 0x7c22) << 4;
         if(!load_addr) load_addr = 0x7c00;
-        load_len = vm_read_word(vm, 0x7c26) << 9;
-        start = vm_read_dword(vm, 0x7c28);
+        load_len = vm_read_word(mem, 0x7c26) << 9;
+        start = vm_read_dword(mem, 0x7c28);
 
         lprintf(
           "el_torito_boot: load 0x%x bytes from sector 0x%x to 0x%x\n",
           load_len, start, load_addr
         );
 
-        disk_read(vm, load_addr, disk, start * 4, load_len >> 9, 1);
+        disk_read(mem, load_addr, disk, start * 4, load_len >> 9, 1);
         ok = 1;
       }
     }
@@ -1409,18 +1158,18 @@ int el_torito_boot(vm_t *vm, unsigned disk)
 }
 
 
-void prepare_boot(vm_t *vm)
+void prepare_boot(x86emu_mem_t *mem)
 {
   if(opt.boot < FIRST_CDROM) {
-    disk_read(vm, 0x7c00, opt.boot, 0, 1, 1);
+    disk_read(mem, 0x7c00, opt.boot, 0, 1, 1);
   }
   else {
-    el_torito_boot(vm, opt.boot);
+    el_torito_boot(mem, opt.boot);
   }
 }
 
 
-int disk_read(vm_t *vm, unsigned addr, unsigned disk, uint64_t sector, unsigned cnt, int log)
+int disk_read(x86emu_mem_t *mem, unsigned addr, unsigned disk, uint64_t sector, unsigned cnt, int log)
 {
   off_t ofs;
   unsigned char *buf;
@@ -1457,7 +1206,7 @@ int disk_read(vm_t *vm, unsigned addr, unsigned disk, uint64_t sector, unsigned 
   }
 
   for(u = 0; u < cnt << 9; u++) {
-    vm_write_byte(vm, addr + u, buf[u]);
+    vm_write_byte(mem, addr + u, buf[u]);
   }
 
   if(log) printf("ok\n");
@@ -1466,27 +1215,27 @@ int disk_read(vm_t *vm, unsigned addr, unsigned disk, uint64_t sector, unsigned 
 }
 
 
-void parse_ptable(vm_t *vm, unsigned addr, ptable_t *ptable, unsigned base, unsigned ext_base, int entries)
+void parse_ptable(x86emu_mem_t *mem, unsigned addr, ptable_t *ptable, unsigned base, unsigned ext_base, int entries)
 {
   unsigned u;
 
   memset(ptable, 0, entries * sizeof *ptable);
 
   for(; entries; entries--, addr += 0x10, ptable++) {
-    u = vm_read_byte(vm, addr);
+    u = vm_read_byte(mem, addr);
     if(u & 0x7f) continue;
     ptable->boot = u >> 7;
-    ptable->type = vm_read_byte(vm, addr + 4);
-    u = vm_read_word(vm, addr + 2);
+    ptable->type = vm_read_byte(mem, addr + 4);
+    u = vm_read_word(mem, addr + 2);
     ptable->start.c = cs2c(u);
     ptable->start.s = cs2s(u);
-    ptable->start.h = vm_read_byte(vm, addr + 1);
-    ptable->start.lin = vm_read_dword(vm, addr + 8);
-    u = vm_read_word(vm, addr + 6);
+    ptable->start.h = vm_read_byte(mem, addr + 1);
+    ptable->start.lin = vm_read_dword(mem, addr + 8);
+    u = vm_read_word(mem, addr + 6);
     ptable->end.c = cs2c(u);
     ptable->end.s = cs2s(u);
-    ptable->end.h = vm_read_byte(vm, addr + 5);
-    ptable->end.lin = ptable->start.lin + vm_read_dword(vm, addr + 0xc);
+    ptable->end.h = vm_read_byte(mem, addr + 5);
+    ptable->end.lin = ptable->start.lin + vm_read_dword(mem, addr + 0xc);
 
     ptable->base = is_ext_ptable(ptable) ? ext_base : base;
 
@@ -1600,20 +1349,20 @@ ptable_t *find_ext_ptable(ptable_t *ptable, int entries)
 }
 
 
-void dump_ptable(vm_t *vm, unsigned disk)
+void dump_ptable(x86emu_mem_t *mem, unsigned disk)
 {
   int i, j, pcnt, link_count;
   ptable_t ptable[4], *ptable_ext;
   unsigned s, h, ext_base;
 
-  i = disk_read(vm, 0, disk, 0, 1, 0);
+  i = disk_read(mem, 0, disk, 0, 1, 0);
 
-  if(i || vm_read_word(vm, 0x1fe) != 0xaa55) {
+  if(i || vm_read_word(mem, 0x1fe) != 0xaa55) {
     printf("    no partition table\n");
     return;
   }
 
-  parse_ptable(vm, 0x1be, ptable, 0, 0, 4);
+  parse_ptable(mem, 0x1be, ptable, 0, 0, 4);
   i = guess_geo(ptable, 4, &s, &h);
   printf("    partition table (");
   if(i) {
@@ -1640,14 +1389,14 @@ void dump_ptable(vm_t *vm, unsigned disk)
       printf("    too many partitions\n");
       break;
     }
-    j = disk_read(vm, 0, disk, ptable_ext->start.lin + ptable_ext->base, 1, 0);
-    if(j || vm_read_word(vm, 0x1fe) != 0xaa55) {
+    j = disk_read(mem, 0, disk, ptable_ext->start.lin + ptable_ext->base, 1, 0);
+    if(j || vm_read_word(mem, 0x1fe) != 0xaa55) {
       printf("    ");
       if(j) printf("disk read error - ");
       printf("not a valid extended partition\n");
       break;
     }
-    parse_ptable(vm, 0x1be, ptable, ptable_ext->start.lin + ptable_ext->base, ext_base, 4);
+    parse_ptable(mem, 0x1be, ptable, ptable_ext->start.lin + ptable_ext->base, ext_base, 4);
     for(i = 0; i < 4; i++) {
       print_ptable_entry(pcnt, ptable + i);
       if(ptable[i].valid && !is_ext_ptable(ptable + i)) pcnt++;
@@ -1656,7 +1405,7 @@ void dump_ptable(vm_t *vm, unsigned disk)
 }
 
 
-char *get_screen(vm_t *vm)
+char *get_screen(x86emu_mem_t *mem)
 {
   unsigned u, x, y;
   unsigned base = 0xb8000;
@@ -1667,7 +1416,7 @@ char *get_screen(vm_t *vm)
 
   for(y = 0; y < 25; y++, base += 80 * 2) {
     for(x = 0; x < 80; x++) {
-      u = vm_read_byte_noerr(vm, base + 2 * x);
+      u = vm_read_byte_noerr(mem, base + 2 * x);
       if(u < 0x20) u = ' ';
       if(u >= 0x7f) u = '?';
       s_l[x] = u;
@@ -1685,9 +1434,9 @@ char *get_screen(vm_t *vm)
 }
 
 
-void dump_screen(vm_t *vm)
+void dump_screen(x86emu_mem_t *mem)
 {
-  printf("- - screen  - -\n%s- - - - - - - -\n", get_screen(vm));
+  printf("- - screen  - -\n%s- - - - - - - -\n", get_screen(mem));
 }
 
 
