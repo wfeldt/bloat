@@ -461,7 +461,7 @@ int check_ip()
       u1 == 0xfe ||
       (u1 == 0xfd && u >= 1 && (u_m1 == 0xfb || u_m1 == 0xfa))
     ) {
-      x86emu_log("* loop detected\n");
+      x86emu_log(&x86emu, "* loop detected\n");
       abort = 1;
     }
   }
@@ -470,7 +470,7 @@ int check_ip()
     u1 = vm_read_byte_noerr(mem, u + 1);
     u2 = vm_read_byte_noerr(mem, u + 2);
     if(u1 == 0xfd && u2 == 0xff) {
-      x86emu_log("* loop detected\n");
+      x86emu_log(&x86emu, "* loop detected\n");
       abort = 1;
     }
   }
@@ -487,7 +487,7 @@ void handle_int(unsigned nr)
   u8 flags;
 
   if(!vm->bios.iv_funcs[nr]) {
-    x86emu_log("# unhandled interrupt 0x%02x\n", nr);
+    x86emu_log(&x86emu, "# unhandled interrupt 0x%02x\n", nr);
     stop = 1;
   }
   else {
@@ -512,7 +512,7 @@ int do_int(u8 num, unsigned type)
 
   if(vm->bios.iv_funcs[num]) return 0;
 
-  x86emu_log("# unhandled interrupt 0x%02x\n", num);
+  x86emu_log(&x86emu, "# unhandled interrupt 0x%02x\n", num);
 
   return 1;
 }
@@ -1051,8 +1051,8 @@ int vm_run(vm_t *vm)
 
   x86emu_exec(vm->emu);
 
+  x86emu_mem_dump(vm->emu);
   x86emu_clear_log(vm->emu, 1);
-  x86emu_clear_log(vm->emu, 0);
 
   if(vm->emu->mem->invalid_write) ok = 0;
 
