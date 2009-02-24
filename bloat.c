@@ -127,6 +127,10 @@ struct {
     unsigned intr:1;
     unsigned acc:1;
     unsigned rawptable:1;
+    unsigned dump:1;
+    unsigned dumpmem:1;
+    unsigned dumpattr:1;
+    unsigned dumpregs:1;
   } show;
 
   struct {
@@ -248,6 +252,10 @@ int main(int argc, char **argv)
           else if(!strcmp(t, "intr")) opt.show.intr = u;
           else if(!strcmp(t, "acc")) opt.show.acc = u;
           else if(!strcmp(t, "rawptable")) opt.show.rawptable = u;
+          else if(!strcmp(t, "dump")) opt.show.dump = u;
+          else if(!strcmp(t, "dump.mem")) opt.show.dumpmem = u;
+          else if(!strcmp(t, "dump.attr")) opt.show.dumpattr = u;
+          else if(!strcmp(t, "dump.regs")) opt.show.dumpregs = u;
           else err = 5;
         }
         break;
@@ -407,7 +415,8 @@ void help()
     "      add cdrom image [with geometry]\n"
     "  --show LIST\n"
     "      things to log\n"
-    "      LIST is a comma-separated list of: code, regs, data, io, acc, rawptable\n"
+    "      LIST is a comma-separated list of: code, regs, data, io, acc, rawptable,\n"
+    "      dump, dump.mem, dump.attr, dump.regs\n"
     "  --no-show LIST\n"
     "      things not to log (see --show)\n"
     "  --feature LIST\n"
@@ -1041,7 +1050,7 @@ void vm_free(vm_t *vm)
 
 int vm_run(vm_t *vm)
 {
-  int ok = 1;
+  int ok = 1, flags;
 
   vm->emu->x86.tsc = 0;
   vm->emu->x86.tsc_max = opt.inst_max;
@@ -1051,7 +1060,15 @@ int vm_run(vm_t *vm)
 
   x86emu_exec(vm->emu);
 
-  x86emu_mem_dump(vm->emu);
+  if(opt.show.dump || opt.show.dumpmem || opt.show.dumpattr || opt.show.dumpregs) {
+    flags = 0;
+    if(opt.show.dump) flags |= -1;
+    if(opt.show.dumpmem) flags |= X86EMU_DUMP_MEM;
+    if(opt.show.dumpattr) flags |= X86EMU_DUMP_MEM | X86EMU_DUMP_ATTR;
+    if(opt.show.dumpregs) flags |= X86EMU_DUMP_REGS;
+    x86emu_log(vm->emu, "\n- - vm dump - -\n");
+    x86emu_dump(vm->emu, flags);
+  }
   x86emu_clear_log(vm->emu, 1);
 
   if(vm->emu->mem->invalid_write) ok = 0;
