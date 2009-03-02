@@ -60,7 +60,7 @@ void handle_int(unsigned nr);
 int check_ip(void);
 vm_t *vm_new(void);
 void vm_free(vm_t *vm);
-int vm_run(vm_t *vm);
+void vm_run(vm_t *vm);
 unsigned cs2s(unsigned cs);
 unsigned cs2c(unsigned cs);
 int do_int(u8 num, unsigned type);
@@ -149,7 +149,7 @@ int main(int argc, char **argv)
   struct stat sbuf;
   uint64_t ul;
   ptable_t ptable[4];
-  x86emu_mem_t *vm_0 = x86emu_mem_new();
+  x86emu_mem_t *vm_0 = x86emu_mem_new(X86EMU_PERM_R | X86EMU_PERM_W);
   vm_t *vm;
 
   log_file = stdout;
@@ -1023,7 +1023,7 @@ vm_t *vm_new()
 
   vm = calloc(1, sizeof *vm);
 
-  vm->emu = x86emu_new();
+  vm->emu = x86emu_new(X86EMU_PERM_R | X86EMU_PERM_W | X86EMU_PERM_X, 0);
   vm->emu->private = vm;
 
   x86emu_set_log(vm->emu, opt.log_size ?: 10000000, flush_log);
@@ -1048,15 +1048,15 @@ void vm_free(vm_t *vm)
 }
 
 
-int vm_run(vm_t *vm)
+void vm_run(vm_t *vm)
 {
-  int ok = 1, flags;
+  int flags;
 
   vm->emu->x86.tsc = 0;
   vm->emu->x86.tsc_max = opt.inst_max;
   vm->emu->x86.R_DL = opt.boot;
 
-  if(vm_read_word(vm->emu->mem, 0x7c00) == 0) return ok;
+  if(vm_read_word(vm->emu->mem, 0x7c00) == 0) return;
 
   x86emu_exec(vm->emu);
 
@@ -1070,10 +1070,6 @@ int vm_run(vm_t *vm)
     x86emu_dump(vm->emu, flags);
   }
   x86emu_clear_log(vm->emu, 1);
-
-  if(vm->emu->mem->invalid_write) ok = 0;
-
-  return ok;
 }
 
 
