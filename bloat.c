@@ -124,13 +124,15 @@ struct {
     unsigned regs:1;
     unsigned data:1;
     unsigned io:1;
-    unsigned intr:1;
+    unsigned ints:1;
     unsigned acc:1;
     unsigned rawptable:1;
     unsigned dump:1;
     unsigned dumpmem:1;
     unsigned dumpattr:1;
     unsigned dumpregs:1;
+    unsigned dumpio:1;
+    unsigned dumpints:1;
   } show;
 
   struct {
@@ -143,7 +145,7 @@ FILE *log_file = NULL;
 
 int main(int argc, char **argv)
 {
-  char *s, *t, *dev_spec;
+  char *s, *t, *dev_spec, *err_msg = NULL;
   int i, j, err;
   unsigned u, u2, ofs, *uu;
   struct stat sbuf;
@@ -249,14 +251,19 @@ int main(int argc, char **argv)
           else if(!strcmp(t, "regs")) opt.show.regs = u;
           else if(!strcmp(t, "data")) opt.show.data = u;
           else if(!strcmp(t, "io")) opt.show.io = u;
-          else if(!strcmp(t, "intr")) opt.show.intr = u;
+          else if(!strcmp(t, "ints")) opt.show.ints = u;
           else if(!strcmp(t, "acc")) opt.show.acc = u;
           else if(!strcmp(t, "rawptable")) opt.show.rawptable = u;
           else if(!strcmp(t, "dump")) opt.show.dump = u;
           else if(!strcmp(t, "dump.mem")) opt.show.dumpmem = u;
           else if(!strcmp(t, "dump.attr")) opt.show.dumpattr = u;
           else if(!strcmp(t, "dump.regs")) opt.show.dumpregs = u;
-          else err = 5;
+          else if(!strcmp(t, "dump.io")) opt.show.dumpio = u;
+          else if(!strcmp(t, "dump.ints")) opt.show.dumpints = u;
+          else {
+            err_msg = t;
+            err = 5;
+          }
         }
         break;
 
@@ -296,7 +303,7 @@ int main(int argc, char **argv)
     }
 
     if(err && (i == 1005 || i == 1006)) {
-      fprintf(stderr, "invalid show spec: %s\n", optarg);
+      fprintf(stderr, "invalid show spec: %s\n", err_msg);
       return 1;
     }
 
@@ -1009,7 +1016,7 @@ vm_t *vm_new()
   if(opt.show.data) vm->emu->log.data = 1;
   if(opt.show.acc) vm->emu->log.acc = 1;
   if(opt.show.io) vm->emu->log.io = 1;
-  if(opt.show.intr) vm->emu->log.intr = 1;
+  if(opt.show.ints) vm->emu->log.ints = 1;
 
   for(u = 0; u < 0x100; u++) x86emu_set_intr_func(vm->emu, u, do_int);
 
@@ -1041,15 +1048,19 @@ void vm_run(vm_t *vm)
 
   x86emu_run(vm->emu, flags);
 
-  if(opt.show.dump || opt.show.dumpmem || opt.show.dumpattr || opt.show.dumpregs) {
-    flags = 0;
-    if(opt.show.dump) flags |= -1;
-    if(opt.show.dumpmem) flags |= X86EMU_DUMP_MEM;
-    if(opt.show.dumpattr) flags |= X86EMU_DUMP_MEM | X86EMU_DUMP_ATTR;
-    if(opt.show.dumpregs) flags |= X86EMU_DUMP_REGS;
+  flags = 0;
+  if(opt.show.dump) flags |= -1;
+  if(opt.show.dumpmem) flags |= X86EMU_DUMP_MEM;
+  if(opt.show.dumpattr) flags |= X86EMU_DUMP_MEM | X86EMU_DUMP_ATTR;
+  if(opt.show.dumpregs) flags |= X86EMU_DUMP_REGS;
+  if(opt.show.dumpio) flags |= X86EMU_DUMP_IO;
+  if(opt.show.dumpints) flags |= X86EMU_DUMP_INTS;
+
+  if(flags) {
     x86emu_log(vm->emu, "\n- - vm dump - -\n");
     x86emu_dump(vm->emu, flags);
   }
+
   x86emu_clear_log(vm->emu, 1);
 }
 
