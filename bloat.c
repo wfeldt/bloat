@@ -137,6 +137,8 @@ struct {
     unsigned dumpregs:1;
     unsigned dumpio:1;
     unsigned dumpints:1;
+    unsigned dumptime:1;
+    unsigned tsc:1;
   } show;
 
   struct {
@@ -264,6 +266,8 @@ int main(int argc, char **argv)
           else if(!strcmp(t, "dump.regs")) opt.show.dumpregs = u;
           else if(!strcmp(t, "dump.io")) opt.show.dumpio = u;
           else if(!strcmp(t, "dump.ints")) opt.show.dumpints = u;
+          else if(!strcmp(t, "dump.time")) opt.show.dumptime = u;
+          else if(!strcmp(t, "tsc")) opt.show.tsc = u;
           else {
             err_msg = t;
             err = 5;
@@ -428,8 +432,8 @@ void help()
     "      add cdrom image [with geometry]\n"
     "  --show LIST\n"
     "      things to log\n"
-    "      LIST is a comma-separated list of: code, regs, data, io, acc, rawptable,\n"
-    "      dump, dump.mem, dump.attr, dump.regs\n"
+    "      LIST is a comma-separated list of: code, regs, data, io, acc, rawptable, tsc,\n"
+    "      dump, dump.mem, dump.attr, dump.regs, dump.io, dump.ints, dump.time\n"
     "  --no-show LIST\n"
     "      things not to log (see --show)\n"
     "  --feature LIST\n"
@@ -1036,6 +1040,7 @@ vm_t *vm_new()
   if(opt.show.acc) vm->emu->log.acc = 1;
   if(opt.show.io) vm->emu->log.io = 1;
   if(opt.show.ints) vm->emu->log.ints = 1;
+  if(opt.show.tsc) vm->emu->log.tsc = 1;
 
   for(u = 0; u < 0x100; u++) x86emu_set_intr_func(vm->emu, u, do_int);
 
@@ -1074,10 +1079,12 @@ void vm_run(vm_t *vm)
   if(opt.show.dumpregs) flags |= X86EMU_DUMP_REGS;
   if(opt.show.dumpio) flags |= X86EMU_DUMP_IO;
   if(opt.show.dumpints) flags |= X86EMU_DUMP_INTS;
+  if(opt.show.dumptime) flags |= X86EMU_DUMP_TIME;
 
   if(flags) {
-    x86emu_log(vm->emu, "\n- - vm dump - -\n");
+    x86emu_log(vm->emu, "\n; - - - emulator state\n");
     x86emu_dump(vm->emu, flags);
+    x86emu_log(vm->emu, "; - - -\n");
   }
 
   x86emu_clear_log(vm->emu, 1);
@@ -1460,7 +1467,7 @@ char *get_screen(x86emu_t *emu)
 
 void dump_screen(x86emu_t *emu)
 {
-  printf("- - screen  - -\n%s- - - - - - - -\n", get_screen(emu));
+  printf("; - - - screen\n%s; - - -\n", get_screen(emu));
 }
 
 
