@@ -133,6 +133,7 @@ struct {
     unsigned rawptable:1;
     unsigned dump:1;
     unsigned dumpmem:1;
+    unsigned dumpinvmem:1;
     unsigned dumpattr:1;
     unsigned dumpregs:1;
     unsigned dumpio:1;
@@ -262,6 +263,7 @@ int main(int argc, char **argv)
           else if(!strcmp(t, "rawptable")) opt.show.rawptable = u;
           else if(!strcmp(t, "dump")) opt.show.dump = u;
           else if(!strcmp(t, "dump.mem")) opt.show.dumpmem = u;
+          else if(!strcmp(t, "dump.invmem")) opt.show.dumpinvmem = u;
           else if(!strcmp(t, "dump.attr")) opt.show.dumpattr = u;
           else if(!strcmp(t, "dump.regs")) opt.show.dumpregs = u;
           else if(!strcmp(t, "dump.io")) opt.show.dumpio = u;
@@ -433,7 +435,7 @@ void help()
     "  --show LIST\n"
     "      things to log\n"
     "      LIST is a comma-separated list of: code, regs, data, io, acc, rawptable, tsc,\n"
-    "      dump, dump.mem, dump.attr, dump.regs, dump.io, dump.ints, dump.time\n"
+    "      dump, dump.mem, dump.invmem, dump.attr, dump.regs, dump.io, dump.ints, dump.time\n"
     "  --no-show LIST\n"
     "      things not to log (see --show)\n"
     "  --feature LIST\n"
@@ -1075,7 +1077,8 @@ void vm_run(vm_t *vm)
   flags = 0;
   if(opt.show.dump) flags |= -1;
   if(opt.show.dumpmem) flags |= X86EMU_DUMP_MEM;
-  if(opt.show.dumpattr) flags |= X86EMU_DUMP_MEM | X86EMU_DUMP_ATTR;
+  if(opt.show.dumpinvmem) flags |= X86EMU_DUMP_INV_MEM;
+  if(opt.show.dumpattr) flags |= X86EMU_DUMP_ATTR;
   if(opt.show.dumpregs) flags |= X86EMU_DUMP_REGS;
   if(opt.show.dumpio) flags |= X86EMU_DUMP_IO;
   if(opt.show.dumpints) flags |= X86EMU_DUMP_INTS;
