@@ -53,7 +53,7 @@ typedef struct {
 
 
 void lprintf(const char *format, ...) __attribute__ ((format (printf, 1, 2)));
-void flush_log(char *buf, unsigned size);
+void flush_log(x86emu_t *emu, char *buf, unsigned size);
 
 void help(void);
 uint64_t vm_read_qword(x86emu_t *emu, unsigned addr);
@@ -145,10 +145,10 @@ struct {
   struct {
     unsigned edd:1;
   } feature;
+
+  FILE *log_file;
 } opt;
 
-
-FILE *log_file = NULL;
 
 int main(int argc, char **argv)
 {
@@ -161,7 +161,7 @@ int main(int argc, char **argv)
   x86emu_t *emu_0 = x86emu_new(X86EMU_PERM_R | X86EMU_PERM_W, 0);
   vm_t *vm;
 
-  log_file = stdout;
+  opt.log_file = stdout;
 
   opt.inst_max = 100000;
   opt.feature.edd = 1;
@@ -406,16 +406,16 @@ void lprintf(const char *format, ...)
   va_list args;
 
   va_start(args, format);
-  if(log_file) vfprintf(log_file, format, args);
+  if(opt.log_file) vfprintf(opt.log_file, format, args);
   va_end(args);
 }
 
 
-void flush_log(char *buf, unsigned size)
+void flush_log(x86emu_t *emu, char *buf, unsigned size)
 {
-  if(!buf || !size || !log_file) return;
+  if(!buf || !size || !opt.log_file) return;
 
-  fwrite(buf, size, 1, log_file);
+  fwrite(buf, size, 1, opt.log_file);
 }
 
 
@@ -1028,7 +1028,6 @@ int do_int_19(x86emu_t *emu)
 vm_t *vm_new()
 {
   vm_t *vm;
-  unsigned u;
 
   vm = calloc(1, sizeof *vm);
 
@@ -1044,8 +1043,7 @@ vm_t *vm_new()
   if(opt.show.ints) vm->emu->log.ints = 1;
   if(opt.show.tsc) vm->emu->log.tsc = 1;
 
-  for(u = 0; u < 0x100; u++) x86emu_set_intr_func(vm->emu, u, do_int);
-
+  x86emu_set_intr_func(vm->emu, do_int);
   x86emu_set_code_check(vm->emu, check_ip);
 
   return vm;
