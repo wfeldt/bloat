@@ -397,6 +397,12 @@ int main(int argc, char **argv)
 
   dump_screen(vm->emu);
 
+  vm_free(vm);
+
+  for(u = 0; u < MAX_DISKS; u++) {
+    free(opt.disk[u].dev);
+  }
+
   return 0;
 }
 
@@ -1052,6 +1058,8 @@ vm_t *vm_new()
 
 void vm_free(vm_t *vm)
 {
+  x86emu_done(vm->emu);
+
   free(vm);
 }
 
@@ -1240,6 +1248,8 @@ int disk_read(x86emu_t *emu, unsigned addr, unsigned disk, uint64_t sector, unsi
   for(u = 0; u < cnt << 9; u++) {
     x86emu_write_byte(emu, addr + u, buf[u]);
   }
+
+  free(buf);
 
   if(log) printf("ok\n");
 
