@@ -1049,8 +1049,8 @@ vm_t *vm_new()
   if(opt.show.ints) vm->emu->log.ints = 1;
   if(opt.show.tsc) vm->emu->log.tsc = 1;
 
-  x86emu_set_intr_func(vm->emu, do_int);
-  x86emu_set_code_check(vm->emu, check_ip);
+  x86emu_set_intr_handler(vm->emu, do_int);
+  x86emu_set_code_handler(vm->emu, check_ip);
 
   return vm;
 }
