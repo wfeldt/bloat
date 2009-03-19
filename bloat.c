@@ -96,7 +96,6 @@ struct option options[] = {
   { "cdrom",      1, NULL, 1003 },
   { "boot",       1, NULL, 1004 },
   { "show",       1, NULL, 1005 },
-  { "no-show",    1, NULL, 1006 },
   { "feature",    1, NULL, 1007 },
   { "no-feature", 1, NULL, 1008 },
   { "max",        1, NULL, 1009 },
@@ -123,23 +122,11 @@ struct {
   unsigned cdroms;
   unsigned boot;
 
+  unsigned trace_flags;
+  unsigned dump_flags;
+
   struct {
-    unsigned code:1;
-    unsigned regs:1;
-    unsigned data:1;
-    unsigned io:1;
-    unsigned ints:1;
-    unsigned acc:1;
     unsigned rawptable:1;
-    unsigned dump:1;
-    unsigned dumpmem:1;
-    unsigned dumpinvmem:1;
-    unsigned dumpattr:1;
-    unsigned dumpregs:1;
-    unsigned dumpio:1;
-    unsigned dumpints:1;
-    unsigned dumptime:1;
-    unsigned tsc:1;
   } show;
 
   struct {
@@ -154,7 +141,7 @@ int main(int argc, char **argv)
 {
   char *s, *t, *dev_spec, *err_msg = NULL;
   int i, j, err;
-  unsigned u, u2, ofs, *uu;
+  unsigned u, u2, ofs, *uu, tbits, dbits;
   struct stat sbuf;
   uint64_t ul;
   ptable_t ptable[4];
@@ -250,29 +237,49 @@ int main(int argc, char **argv)
         break;
 
       case 1005:
-      case 1006:
-        s = optarg;
-        u = i == 1005 ? 1 : 0;
-        while((t = strsep(&s, ","))) {
-          if(!strcmp(t, "code")) opt.show.code = u;
-          else if(!strcmp(t, "regs")) opt.show.regs = u;
-          else if(!strcmp(t, "data")) opt.show.data = u;
-          else if(!strcmp(t, "io")) opt.show.io = u;
-          else if(!strcmp(t, "ints")) opt.show.ints = u;
-          else if(!strcmp(t, "acc")) opt.show.acc = u;
-          else if(!strcmp(t, "rawptable")) opt.show.rawptable = u;
-          else if(!strcmp(t, "dump")) opt.show.dump = u;
-          else if(!strcmp(t, "dump.mem")) opt.show.dumpmem = u;
-          else if(!strcmp(t, "dump.invmem")) opt.show.dumpinvmem = u;
-          else if(!strcmp(t, "dump.attr")) opt.show.dumpattr = u;
-          else if(!strcmp(t, "dump.regs")) opt.show.dumpregs = u;
-          else if(!strcmp(t, "dump.io")) opt.show.dumpio = u;
-          else if(!strcmp(t, "dump.ints")) opt.show.dumpints = u;
-          else if(!strcmp(t, "dump.time")) opt.show.dumptime = u;
-          else if(!strcmp(t, "tsc")) opt.show.tsc = u;
-          else {
+        for(s = optarg; (t = strsep(&s, ",")); ) {
+          u = 1;
+          tbits = dbits = 0;
+          while(*t == '+' || *t == '-') u = *t++ == '+' ? 1 : 0;
+               if(!strcmp(t, "trace")) tbits = X86EMU_TRACE_DEFAULT;
+          else if(!strcmp(t, "code"))  tbits = X86EMU_TRACE_CODE;
+          else if(!strcmp(t, "regs"))  tbits = X86EMU_TRACE_REGS;
+          else if(!strcmp(t, "data"))  tbits = X86EMU_TRACE_DATA;
+          else if(!strcmp(t, "acc"))   tbits = X86EMU_TRACE_ACC;
+          else if(!strcmp(t, "io"))    tbits = X86EMU_TRACE_IO;
+          else if(!strcmp(t, "ints"))  tbits = X86EMU_TRACE_INTS;
+          else if(!strcmp(t, "time"))  tbits = X86EMU_TRACE_TIME;
+          else if(!strcmp(t, "dump"))         dbits = X86EMU_DUMP_DEFAULT;
+          else if(!strcmp(t, "dump.regs"))    dbits = X86EMU_DUMP_REGS;
+          else if(!strcmp(t, "dump.mem"))     dbits = X86EMU_DUMP_MEM;
+          else if(!strcmp(t, "dump.mem.acc")) dbits = X86EMU_DUMP_ACC_MEM;
+          else if(!strcmp(t, "dump.mem.inv")) dbits = X86EMU_DUMP_INV_MEM;
+          else if(!strcmp(t, "dump.attr"))    dbits = X86EMU_DUMP_ATTR;
+          else if(!strcmp(t, "dump.io"))      dbits = X86EMU_DUMP_IO;
+          else if(!strcmp(t, "dump.ints"))    dbits = X86EMU_DUMP_INTS;
+          else if(!strcmp(t, "dump.time"))    dbits = X86EMU_DUMP_TIME;
+          else if(!strcmp(t, "rawptable"))    opt.show.rawptable = u;
+          else err = 5;
+          if(err) {
             err_msg = t;
-            err = 5;
+          }
+          else {
+            if(tbits) {
+              if(u) {
+                opt.trace_flags |= tbits;
+              }
+              else {
+                opt.trace_flags &= ~tbits;
+              }
+            }
+            if(dbits) {
+              if(u) {
+                opt.dump_flags |= dbits;
+              }
+              else {
+                opt.dump_flags &= ~dbits;
+              }
+            }
           }
         }
         break;
@@ -428,7 +435,9 @@ void flush_log(x86emu_t *emu, char *buf, unsigned size)
 void help()
 {
   fprintf(stderr,
-    "Boot Loader Test\nusage: bloat options\n"
+    "Boot Loader Test\nUsage: bloat OPTIONS\n"
+    "\n"
+    "Options:\n"
     "  --boot DEVICE\n"
     "      boot from DEVICE\n"
     "      DEVICE is either a number (0-0xff) or one of: floppy, disk, cdrom\n"
@@ -439,11 +448,12 @@ void help()
     "  --cdrom device[,heads,sectors]\n"
     "      add cdrom image [with geometry]\n"
     "  --show LIST\n"
-    "      things to log\n"
-    "      LIST is a comma-separated list of: code, regs, data, io, acc, rawptable, tsc,\n"
-    "      dump, dump.mem, dump.invmem, dump.attr, dump.regs, dump.io, dump.ints, dump.time\n"
-    "  --no-show LIST\n"
-    "      things not to log (see --show)\n"
+    "      Things to log. LIST is a comma-separated list of code, regs, data, acc,\n"
+    "      io, ints, time, dump.regs, dump.mem, dump.mem.acc, dump.mem.inv,\n"
+    "      dump.attr, dump.io, dump.ints, dump.time.\n"
+    "      Every item can be prefixed by '-' to turn it off.\n"
+    "      Use trace and dump as shorthands for a useful combination of items\n"
+    "      from the above list.\n"
     "  --feature LIST\n"
     "      features to enable\n"
     "      LIST is a comma-separated list of: edd\n"
@@ -1041,13 +1051,8 @@ vm_t *vm_new()
   vm->emu->private = vm;
 
   x86emu_set_log(vm->emu, opt.log_size ?: 10000000, flush_log);
-  if(opt.show.regs) vm->emu->log.regs = 1;
-  if(opt.show.code) vm->emu->log.code = 1;
-  if(opt.show.data) vm->emu->log.data = 1;
-  if(opt.show.acc) vm->emu->log.acc = 1;
-  if(opt.show.io) vm->emu->log.io = 1;
-  if(opt.show.ints) vm->emu->log.ints = 1;
-  if(opt.show.tsc) vm->emu->log.tsc = 1;
+
+  vm->emu->log.trace = opt.trace_flags;
 
   x86emu_set_intr_handler(vm->emu, do_int);
   x86emu_set_code_handler(vm->emu, check_ip);
@@ -1066,7 +1071,7 @@ void vm_free(vm_t *vm)
 
 void vm_run(vm_t *vm)
 {
-  int flags;
+  unsigned flags;
 
   vm->emu->x86.R_DL = opt.boot;
 
@@ -1080,19 +1085,9 @@ void vm_run(vm_t *vm)
 
   x86emu_run(vm->emu, flags);
 
-  flags = 0;
-  if(opt.show.dump) flags |= -1;
-  if(opt.show.dumpmem) flags |= X86EMU_DUMP_MEM;
-  if(opt.show.dumpinvmem) flags |= X86EMU_DUMP_INV_MEM;
-  if(opt.show.dumpattr) flags |= X86EMU_DUMP_ATTR;
-  if(opt.show.dumpregs) flags |= X86EMU_DUMP_REGS;
-  if(opt.show.dumpio) flags |= X86EMU_DUMP_IO;
-  if(opt.show.dumpints) flags |= X86EMU_DUMP_INTS;
-  if(opt.show.dumptime) flags |= X86EMU_DUMP_TIME;
-
-  if(flags) {
+  if(opt.dump_flags) {
     x86emu_log(vm->emu, "\n; - - - emulator state\n");
-    x86emu_dump(vm->emu, flags);
+    x86emu_dump(vm->emu, opt.dump_flags);
     x86emu_log(vm->emu, "; - - -\n");
   }
 
