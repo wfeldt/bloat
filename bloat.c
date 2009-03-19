@@ -1050,7 +1050,7 @@ vm_t *vm_new()
   vm->emu = x86emu_new(X86EMU_PERM_R | X86EMU_PERM_W | X86EMU_PERM_X, 0);
   vm->emu->private = vm;
 
-  x86emu_set_log(vm->emu, opt.log_size ?: 10000000, flush_log);
+  x86emu_set_log(vm->emu, opt.log_size ?: 100000000, flush_log);
 
   vm->emu->log.trace = opt.trace_flags;
 
@@ -1102,10 +1102,9 @@ void prepare_bios(vm_t *vm)
 
   vm->memsize = 1024;	// 1GB RAM
 
-  // jmp far 0:0x7c00
-  x86emu_write_byte(emu, 0xffff0, 0xea);
-  x86emu_write_word(emu, 0xffff1, 0x7c00);
-  x86emu_write_word(emu, 0xffff3, 0x0000);
+  // start address 0:0x7c00
+  x86emu_set_seg_register(vm->emu, vm->emu->x86.R_CS_SEL, 0);
+  vm->emu->x86.R_EIP = 0x7c00;
 
   x86emu_write_word(emu, 0x413, 640);	// mem size in kB
   x86emu_write_byte(emu, 0x449, 3);		// video mode
