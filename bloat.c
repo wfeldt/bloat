@@ -249,6 +249,7 @@ int main(int argc, char **argv)
           else if(!strcmp(t, "io"))    tbits = X86EMU_TRACE_IO;
           else if(!strcmp(t, "ints"))  tbits = X86EMU_TRACE_INTS;
           else if(!strcmp(t, "time"))  tbits = X86EMU_TRACE_TIME;
+          else if(!strcmp(t, "debug")) tbits = X86EMU_TRACE_DEBUG;
           else if(!strcmp(t, "dump"))         dbits = X86EMU_DUMP_DEFAULT;
           else if(!strcmp(t, "dump.regs"))    dbits = X86EMU_DUMP_REGS;
           else if(!strcmp(t, "dump.mem"))     dbits = X86EMU_DUMP_MEM;
@@ -347,7 +348,7 @@ int main(int argc, char **argv)
     }
   }
 
-  printf("drive map:\n");
+  lprintf("; drive map:\n");
 
   for(i = 0; i < MAX_DISKS; i++) {
     opt.disk[i].fd = -1;
@@ -376,7 +377,7 @@ int main(int argc, char **argv)
     opt.disk[i].size = ul >> 9;
     opt.disk[i].cylinders = opt.disk[i].size / (opt.disk[i].sectors * opt.disk[i].heads);
 
-    printf("  0x%02x: %s, chs %u/%u/%u, %llu sectors\n",
+    lprintf(";   0x%02x: %s, chs %u/%u/%u, %llu sectors\n",
       i,
       opt.disk[i].dev,
       opt.disk[i].cylinders,
@@ -390,7 +391,7 @@ int main(int argc, char **argv)
 
   emu_0 = x86emu_done(emu_0);
 
-  printf("boot device: 0x%02x\n", opt.boot);
+  lprintf("; boot device: 0x%02x\n", opt.boot);
 
   fflush(stdout);
 
@@ -449,7 +450,7 @@ void help()
     "      add cdrom image [with geometry]\n"
     "  --show LIST\n"
     "      Things to log. LIST is a comma-separated list of code, regs, data, acc,\n"
-    "      io, ints, time, dump.regs, dump.mem, dump.mem.acc, dump.mem.inv,\n"
+    "      io, ints, time, debug, dump.regs, dump.mem, dump.mem.acc, dump.mem.inv,\n"
     "      dump.attr, dump.io, dump.ints, dump.time.\n"
     "      Every item can be prefixed by '-' to turn it off.\n"
     "      Use trace and dump as shorthands for a useful combination of items\n"
@@ -565,36 +566,36 @@ int do_int_10(x86emu_t *emu)
 
   switch(emu->x86.R_AH) {
     case 0x01:
-      printf("int 0x10: ah 0x%02x (set cursor shape)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x10: ah 0x%02x (set cursor shape)\n", emu->x86.R_AH);
       // emu->x86.R_CX: shape
       break;
 
     case 0x02:
-      printf("int 0x10: ah 0x%02x (set cursor)\n", emu->x86.R_AH);
-      printf("(x, y) = (%u, %u)\n", emu->x86.R_DL, emu->x86.R_DH);
+      x86emu_log(emu, "; int 0x10: ah 0x%02x (set cursor)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; (x, y) = (%u, %u)\n", emu->x86.R_DL, emu->x86.R_DH);
       page = emu->x86.R_BH & 7;
       x86emu_write_byte(emu, 0x450 + 2 * page, emu->x86.R_DL);	// x
       x86emu_write_byte(emu, 0x451 + 2 * page, emu->x86.R_DH);	// y
       break;
 
     case 0x03:
-      printf("int 0x10: ah 0x%02x (get cursor)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x10: ah 0x%02x (get cursor)\n", emu->x86.R_AH);
       page = emu->x86.R_BH & 7;
       emu->x86.R_DL = x86emu_read_byte(emu, 0x450 + 2 * page);	// x
       emu->x86.R_DH = x86emu_read_byte(emu, 0x451 + 2 * page);	// y
       emu->x86.R_CX = 0x607;					// cursor shape
-      printf("(x, y) = (%u, %u)\n", emu->x86.R_DL, emu->x86.R_DH);
+      x86emu_log(emu, "; (x, y) = (%u, %u)\n", emu->x86.R_DL, emu->x86.R_DH);
       break;
 
     case 0x06:
-      printf("int 0x10: ah 0x%02x (scroll up)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x10: ah 0x%02x (scroll up)\n", emu->x86.R_AH);
       attr = 0x20 + (emu->x86.R_BH << 8);
       x0 = emu->x86.R_CL;
       y0 = emu->x86.R_CH;
       x1 = emu->x86.R_DL;
       y1 = emu->x86.R_DH;
       d = emu->x86.R_AL;
-      printf("  window (%u, %u) - (%u, %u), by %u lines\n", x0, y0, x1, y1, d);
+      x86emu_log(emu, ";   window (%u, %u) - (%u, %u), by %u lines\n", x0, y0, x1, y1, d);
       width = x86emu_read_byte(emu, 0x44a);
       if(x0 > width) x0 = width;
       if(x1 > width) x1 = width;
@@ -624,14 +625,14 @@ int do_int_10(x86emu_t *emu)
       break;
 
     case 0x09:
-      printf("int 0x10: ah 0x%02x (write char & attr)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x10: ah 0x%02x (write char & attr)\n", emu->x86.R_AH);
       u = emu->x86.R_AL;
       attr = emu->x86.R_BL;
       page = emu->x86.R_BH & 7;
       cnt = emu->x86.R_CX;
       cur_x = x86emu_read_byte(emu, 0x450 + 2 * page);
       cur_y = x86emu_read_byte(emu, 0x451 + 2 * page);
-      printf("char 0x%02x '%c', attr 0x%02x, cnt %u\n", u, u >= 0x20 && u < 0x7f ? u : ' ', attr, cnt);
+      x86emu_log(emu, "; char 0x%02x '%c', attr 0x%02x, cnt %u\n", u, u >= 0x20 && u < 0x7f ? u : ' ', attr, cnt);
       while(cnt--) {
         x86emu_write_byte(emu, 0xb8000 + 2 * (cur_x + 80 * cur_y), u);
         x86emu_write_byte(emu, 0xb8001 + 2 * (cur_x + 80 * cur_y), attr);
@@ -640,12 +641,12 @@ int do_int_10(x86emu_t *emu)
       break;
 
     case 0x0e:
-      printf("int 0x10: ah 0x%02x (tty print)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x10: ah 0x%02x (tty print)\n", emu->x86.R_AH);
       u = emu->x86.R_AL;
       page = emu->x86.R_BH & 7;
       cur_x = x86emu_read_byte(emu, 0x450 + 2 * page);
       cur_y = x86emu_read_byte(emu, 0x451 + 2 * page);
-      printf("char 0x%02x '%c'\n", u, u >= 0x20 && u < 0x7f ? u : ' ');
+      x86emu_log(emu, "; char 0x%02x '%c'\n", u, u >= 0x20 && u < 0x7f ? u : ' ');
       if(u == 0x0d) {
         cur_x = 0;
       }
@@ -672,7 +673,7 @@ int do_int_10(x86emu_t *emu)
       break;
 
     default:
-      printf("int 0x10: ah 0x%02x\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x10: ah 0x%02x\n", emu->x86.R_AH);
       break;
   }
 
@@ -682,9 +683,9 @@ int do_int_10(x86emu_t *emu)
 
 int do_int_11(x86emu_t *emu)
 {
-  printf("int 0x11: (get equipment list)\n");
+  x86emu_log(emu, "; int 0x11: (get equipment list)\n");
   emu->x86.R_AX = 0x4026;
-  printf("eq mask: %04x\n", emu->x86.R_AX);
+  x86emu_log(emu, "; eq mask: %04x\n", emu->x86.R_AX);
 
   return 0;
 }
@@ -692,9 +693,9 @@ int do_int_11(x86emu_t *emu)
 
 int do_int_12(x86emu_t *emu)
 {
-  printf("int 0x12: (get base mem size)\n");
+  x86emu_log(emu, "; int 0x12: (get base mem size)\n");
   emu->x86.R_AX = x86emu_read_word(emu, 0x413);
-  printf("base mem size: %u kB\n", emu->x86.R_AX);
+  x86emu_log(emu, "; base mem size: %u kB\n", emu->x86.R_AX);
 
   return 0;
 }
@@ -708,9 +709,9 @@ int do_int_13(x86emu_t *emu)
 
   switch(emu->x86.R_AH) {
     case 0x00:
-      printf("int 0x13: ah 0x%02x (disk reset)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x13: ah 0x%02x (disk reset)\n", emu->x86.R_AH);
       disk = emu->x86.R_DL;
-      printf("drive 0x%02x\n", disk);
+      x86emu_log(emu, "; drive 0x%02x\n", disk);
       if(disk >= MAX_DISKS || !opt.disk[disk].dev) {
         emu->x86.R_AH = 7;
         X86EMU_SET_FLAG(emu, F_CF);
@@ -722,14 +723,14 @@ int do_int_13(x86emu_t *emu)
       break;
 
     case 0x02:
-      printf("int 0x13: ah 0x%02x (disk read)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x13: ah 0x%02x (disk read)\n", emu->x86.R_AH);
       disk = emu->x86.R_DL;
       cnt = emu->x86.R_AL;
       head = emu->x86.R_DH;
       cylinder = cs2c(emu->x86.R_CX);
       sector = cs2s(emu->x86.R_CX);
       addr = (emu->x86.R_ES << 4) + emu->x86.R_BX;
-      printf("drive 0x%02x, chs %u/%u/%u, %u sectors, buf 0x%05x\n",
+      x86emu_log(emu, "; drive 0x%02x, chs %u/%u/%u, %u sectors, buf 0x%05x\n",
         disk,
         cylinder, head, sector,
         cnt,
@@ -754,9 +755,9 @@ int do_int_13(x86emu_t *emu)
       break;
 
     case 0x08:
-      printf("int 0x13: ah 0x%02x (get drive params)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x13: ah 0x%02x (get drive params)\n", emu->x86.R_AH);
       disk = emu->x86.R_DL;
-      printf("drive 0x%02x\n", disk);
+      x86emu_log(emu, "; drive 0x%02x\n", disk);
       if(
         disk >= MAX_DISKS ||
         !opt.disk[disk].dev ||
@@ -780,9 +781,9 @@ int do_int_13(x86emu_t *emu)
       break;
 
     case 0x41:
-      printf("int 0x13: ah 0x%02x (edd install check)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x13: ah 0x%02x (edd install check)\n", emu->x86.R_AH);
       disk = emu->x86.R_DL;
-      printf("drive 0x%02x\n", disk);
+      x86emu_log(emu, "; drive 0x%02x\n", disk);
       if(!opt.feature.edd || disk >= MAX_DISKS || !opt.disk[disk].dev || emu->x86.R_BX != 0x55aa) {
         emu->x86.R_AH = 1;
         X86EMU_SET_FLAG(emu, F_CF);
@@ -796,15 +797,14 @@ int do_int_13(x86emu_t *emu)
       break;
 
     case 0x42:
-      printf("int 0x13: ah 0x%02x (edd disk read)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x13: ah 0x%02x (edd disk read)\n", emu->x86.R_AH);
       disk = emu->x86.R_DL;
       addr = (emu->x86.R_DS << 4) + emu->x86.R_SI;
-      printf("drive 0x%02x, request packet:\n0x%05x: ", disk, addr);
+      x86emu_log(emu, "; drive 0x%02x, request packet:\n; 0x%05x:", disk, addr);
       j = x86emu_read_byte(emu, addr);
       j = j == 0x10 || j == 0x18 ? j : 0x10;
-      for(i = 0; i < j; i++) {
-        printf("%02x%c", x86emu_read_byte(emu, addr + i), i == j - 1 ? '\n' : ' ');
-      }
+      for(i = 0; i < j; i++) x86emu_log(emu, " %02x", x86emu_read_byte(emu, addr + i));
+      x86emu_log(emu, "\n");
       if(
         !opt.feature.edd || disk >= MAX_DISKS || !opt.disk[disk].dev ||
         (x86emu_read_byte(emu, addr) != 0x10 && x86emu_read_byte(emu, addr) != 0x18)
@@ -837,9 +837,9 @@ int do_int_13(x86emu_t *emu)
       break;
 
     case 0x48:
-      printf("int 0x13: ax 0x%02x (get drive params)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x13: ax 0x%02x (get drive params)\n", emu->x86.R_AH);
       disk = emu->x86.R_DL;
-      printf("drive 0x%02x\n", disk);
+      x86emu_log(emu, "; drive 0x%02x\n", disk);
       if(
         disk >= MAX_DISKS ||
         !opt.disk[disk].dev ||
@@ -865,7 +865,7 @@ int do_int_13(x86emu_t *emu)
       break;
 
     case 0x4b:
-      printf("int 0x13: ax 0x%04x (terminate disk emulation)\n", emu->x86.R_AX);
+      x86emu_log(emu, "; int 0x13: ax 0x%04x (terminate disk emulation)\n", emu->x86.R_AX);
       if(emu->x86.R_AL == 1) {
         emu->x86.R_AH = 0x01;
         X86EMU_SET_FLAG(emu, F_CF);
@@ -877,7 +877,7 @@ int do_int_13(x86emu_t *emu)
       break;
 
     default:
-      printf("int 0x13: ah 0x%02x (not implemented)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x13: ah 0x%02x (not implemented)\n", emu->x86.R_AH);
 
       emu->x86.R_AH = 0x01;
       X86EMU_SET_FLAG(emu, F_CF);
@@ -895,31 +895,31 @@ int do_int_15(x86emu_t *emu)
 
   switch(emu->x86.R_AH) {
     case 0x24:
-      printf("int 0x15: ah 0x%02x (a20 gate)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x15: ah 0x%02x (a20 gate)\n", emu->x86.R_AH);
       switch(emu->x86.R_AL) {
         case 0:
           vm->a20 = 0;
-          printf("a20 disabled\n");
+          x86emu_log(emu, "; a20 disabled\n");
           emu->x86.R_AH = 0;
           X86EMU_CLEAR_FLAG(emu, F_CF);
           break;
 
         case 1:
           vm->a20 = 1;
-          printf("a20 enabled\n");
+          x86emu_log(emu, "; a20 enabled\n");
           emu->x86.R_AH = 0;
           X86EMU_CLEAR_FLAG(emu, F_CF);
           break;
 
         case 2:
-          printf("a20 status: %u\n", vm->a20);
+          x86emu_log(emu, "; a20 status: %u\n", vm->a20);
           emu->x86.R_AH = 0;
           emu->x86.R_AL = vm->a20;
           X86EMU_CLEAR_FLAG(emu, F_CF);
           break;
 
         case 3:
-          printf("a20 support: 3\n");
+          x86emu_log(emu, "; a20 support: 3\n");
           emu->x86.R_AH = 0;
           emu->x86.R_BX = 3;
           X86EMU_CLEAR_FLAG(emu, F_CF);
@@ -932,22 +932,22 @@ int do_int_15(x86emu_t *emu)
       break;
 
     case 0x42:
-      printf("int 0x15: ax 0x%04x (thinkpad stuff)\n", emu->x86.R_AX);
+      x86emu_log(emu, "; int 0x15: ax 0x%04x (thinkpad stuff)\n", emu->x86.R_AX);
       // emu->x86.R_AX = 0x8600;	// ask for F11
       // emu->x86.R_AX = 1;		// start rescue
       break;
 
     case 0x88:
-      printf("int 0x15: ah 0x%02x (ext. mem size)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x15: ah 0x%02x (ext. mem size)\n", emu->x86.R_AH);
       u = vm->memsize - 1;
-      printf("ext mem size: %u MB\n", u);
+      x86emu_log(emu, "; ext mem size: %u MB\n", u);
       emu->x86.R_AX = u;
       X86EMU_CLEAR_FLAG(emu, F_CF);
       break;
 
     case 0xe8:
       if(emu->x86.R_AL == 1) {
-        printf("int 0x15: ax 0x%04x (mem map (old))\n", emu->x86.R_AX);
+        x86emu_log(emu, "; int 0x15: ax 0x%04x (mem map (old))\n", emu->x86.R_AX);
         u = vm->memsize - 1;
         u1 = 0;
         if(u > 15) {
@@ -956,11 +956,11 @@ int do_int_15(x86emu_t *emu)
         }
         emu->x86.R_AX = emu->x86.R_CX = u << 10;
         emu->x86.R_BX = emu->x86.R_DX = u1 << 4;
-        printf("ext mem sizes: %u MB + %u MB\n", u, u1);
+        x86emu_log(emu, "; ext mem sizes: %u MB + %u MB\n", u, u1);
         X86EMU_CLEAR_FLAG(emu, F_CF);
       }
       if(emu->x86.R_AL == 0x20 && emu->x86.R_EDX == 0x534d4150) {
-        printf("int 0x15: ax 0x%04x (mem map (new))\n", emu->x86.R_AX);
+        x86emu_log(emu, "; int 0x15: ax 0x%04x (mem map (new))\n", emu->x86.R_AX);
         u = vm->memsize;
         if(emu->x86.R_EBX == 0) {
           emu->x86.R_EAX = 0x534d4150;
@@ -970,7 +970,7 @@ int do_int_15(x86emu_t *emu)
           vm_write_qword(emu, u1, 0);
           vm_write_qword(emu, u1 + 8, (uint64_t) u << 20);
           x86emu_write_dword(emu, u1 + 0x10, 1);
-          printf("mem size: %u MB\n", u);
+          x86emu_log(emu, "; mem size: %u MB\n", u);
           X86EMU_CLEAR_FLAG(emu, F_CF);
         }
         else {
@@ -980,7 +980,7 @@ int do_int_15(x86emu_t *emu)
       break;
 
     default:
-      printf("int 0x15: ax 0x%04x\n", emu->x86.R_AX);
+      x86emu_log(emu, "; int 0x15: ax 0x%04x\n", emu->x86.R_AX);
       break;
   }
 
@@ -996,20 +996,20 @@ int do_int_16(x86emu_t *emu)
   switch(emu->x86.R_AH) {
     case 0x00:
     case 0x10:
-      printf("int 0x16: ah 0x%02x (get key)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x16: ah 0x%02x (get key)\n", emu->x86.R_AH);
       emu->x86.R_AX = vm->key ?: 0x1c0d;
       vm->key = 0;
 
 #if 0
       // we should rather stop here
-      printf("blocking key read - stopped\n");
+      x86emu_log(emu, "; blocking key read - stopped\n");
       stop = 1;
 #endif
       break;
 
     case 0x01:
     case 0x11:
-      printf("int 0x16: ah 0x%02x (check for key)\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x16: ah 0x%02x (check for key)\n", emu->x86.R_AH);
       vm->kbd_cnt++;
 
       if(vm->kbd_cnt % 4) {
@@ -1023,7 +1023,7 @@ int do_int_16(x86emu_t *emu)
       break;
 
     default:
-      printf("int 0x16: ah 0x%02x\n", emu->x86.R_AH);
+      x86emu_log(emu, "; int 0x16: ah 0x%02x\n", emu->x86.R_AH);
       break;
   }
 
@@ -1035,7 +1035,7 @@ int do_int_19(x86emu_t *emu)
 {
 //  vm_t *vm = emu->private;
 
-  printf("int 0x19: (boot next device)\n");
+  x86emu_log(emu, "; int 0x19: (boot next device)\n");
 
   return 1;
 }
@@ -1209,31 +1209,31 @@ int disk_read(x86emu_t *emu, unsigned addr, unsigned disk, uint64_t sector, unsi
   unsigned char *buf;
   unsigned u;
 
-  if(log) printf("read: disk 0x%02x, sector %llu (%u) @ 0x%05x - ",
+  if(log) x86emu_log(emu, "; read: disk 0x%02x, sector %llu (%u) @ 0x%05x - ",
     disk, (unsigned long long) sector, cnt, addr
   );
 
   if(disk >= MAX_DISKS || !opt.disk[disk].dev) {
-    if(log) printf("invalid disk\n");
+    if(log) x86emu_log(emu, "invalid disk\n");
     return 2;
   }
 
   if(opt.disk[disk].fd < 0) {
-    if(log) printf("failed to open disk\n");
+    if(log) x86emu_log(emu, "failed to open disk\n");
     return 3;
   }
 
   ofs = sector << 9;
 
   if(lseek(opt.disk[disk].fd, ofs, SEEK_SET) != ofs) {
-    if(log) printf("sector not found\n");
+    if(log) x86emu_log(emu, "sector not found\n");
     return 4;
   }
 
   buf = malloc(cnt << 9);
 
   if(read(opt.disk[disk].fd, buf, cnt << 9) != (cnt << 9)) {
-    if(log) printf("read error\n");
+    if(log) x86emu_log(emu, "read error\n");
     free(buf);
 
     return 5;
@@ -1245,7 +1245,7 @@ int disk_read(x86emu_t *emu, unsigned addr, unsigned disk, uint64_t sector, unsi
 
   free(buf);
 
-  if(log) printf("ok\n");
+  if(log) x86emu_log(emu, "ok\n");
 
   return 0;
 }
@@ -1345,17 +1345,17 @@ void print_ptable_entry(int nr, ptable_t *ptable)
   unsigned u;
 
   if(ptable->valid) {
-    printf("    ");
+    lprintf(";     ");
     if(nr > 4 && is_ext_ptable(ptable)) {
-      printf("-");
+      lprintf("-");
     }
     else {
-      printf("%d", nr);
+      lprintf("%d", nr);
     }
 
     u = opt.show.rawptable ? 0 : ptable->base;
 
-    printf(": %c 0x%02x, start %4u/%3u/%2u %9u, end %4u/%3u/%2u %9u",
+    lprintf(": %c 0x%02x, start %4u/%3u/%2u %9u, end %4u/%3u/%2u %9u",
       ptable->boot ? '*' : ' ',
       ptable->type,
       ptable->start.c, ptable->start.h, ptable->start.s,
@@ -1364,8 +1364,8 @@ void print_ptable_entry(int nr, ptable_t *ptable)
       ptable->end.lin + u
     );
 
-    if(opt.show.rawptable) printf(" %+9d", ptable->base);
-    printf("\n");
+    if(opt.show.rawptable) lprintf(" %+9d", ptable->base);
+    lprintf("\n");
   }
 }
 
@@ -1394,18 +1394,18 @@ void dump_ptable(x86emu_t *emu, unsigned disk)
   i = disk_read(emu, 0, disk, 0, 1, 0);
 
   if(i || x86emu_read_word(emu, 0x1fe) != 0xaa55) {
-    printf("    no partition table\n");
+    lprintf(";     no partition table\n");
     return;
   }
 
   parse_ptable(emu, 0x1be, ptable, 0, 0, 4);
   i = guess_geo(ptable, 4, &s, &h);
-  printf("    partition table (");
+  lprintf(";     partition table (");
   if(i) {
-    printf("hs %u/%u):\n", h, s);
+    lprintf("hs %u/%u):\n", h, s);
   }
   else {
-    printf("inconsistent chs):\n");
+    lprintf("inconsistent chs):\n");
   }
 
   for(i = 0; i < 4; i++) {
@@ -1422,14 +1422,14 @@ void dump_ptable(x86emu_t *emu, unsigned disk)
       ext_base = ptable_ext->start.lin;
     }
     if(link_count > 100) {
-      printf("    too many partitions\n");
+      lprintf(";    too many partitions\n");
       break;
     }
     j = disk_read(emu, 0, disk, ptable_ext->start.lin + ptable_ext->base, 1, 0);
     if(j || x86emu_read_word(emu, 0x1fe) != 0xaa55) {
-      printf("    ");
-      if(j) printf("disk read error - ");
-      printf("not a valid extended partition\n");
+      lprintf(";    ");
+      if(j) lprintf("disk read error - ");
+      lprintf("not a valid extended partition\n");
       break;
     }
     parse_ptable(emu, 0x1be, ptable, ptable_ext->start.lin + ptable_ext->base, ext_base, 4);
@@ -1472,7 +1472,7 @@ char *get_screen(x86emu_t *emu)
 
 void dump_screen(x86emu_t *emu)
 {
-  printf("; - - - screen\n%s; - - -\n", get_screen(emu));
+  lprintf("; - - - screen\n%s; - - -\n", get_screen(emu));
 }
 
 
