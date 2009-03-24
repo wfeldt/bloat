@@ -1050,7 +1050,9 @@ vm_t *vm_new()
   vm->emu = x86emu_new(X86EMU_PERM_R | X86EMU_PERM_W | X86EMU_PERM_X, 0);
   vm->emu->private = vm;
 
-  x86emu_set_log(vm->emu, opt.log_size ?: 100000000, flush_log);
+  if(opt.verbose >= 1 || opt.trace_flags || opt.dump_flags) {
+    x86emu_set_log(vm->emu, opt.log_size ?: 100000000, flush_log);
+  }
 
   vm->emu->log.trace = opt.trace_flags;
 
