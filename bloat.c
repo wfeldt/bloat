@@ -150,7 +150,7 @@ int main(int argc, char **argv)
 
   opt.log_file = stdout;
 
-  opt.inst_max = 100000;
+  opt.inst_max = 10000000;
   opt.feature.edd = 1;
 
   opterr = 0;
@@ -542,15 +542,13 @@ void handle_int(x86emu_t *emu, unsigned nr)
 
 int do_int(x86emu_t *emu, u8 num, unsigned type)
 {
-  vm_t *vm = emu->private;
-
   if((type & 0xff) == INTR_TYPE_FAULT) {
     x86emu_stop(emu);
 
     return 0;
   }
 
-  if(vm->bios.iv_funcs[num]) return 0;
+  if(x86emu_read_word(emu, num * 4)) return 0;
 
   x86emu_log(emu, "# unhandled interrupt 0x%02x\n", num);
 
@@ -1077,7 +1075,12 @@ void vm_run(vm_t *vm)
 
   vm->emu->x86.R_DL = opt.boot;
 
-  if(x86emu_read_word(vm->emu, 0x7c00) == 0) return;
+  if(x86emu_read_word(vm->emu, 0x7c00) == 0) {
+    x86emu_log(vm->emu, "# no boot code\n");
+    x86emu_clear_log(vm->emu, 1);
+
+    return;
+  }
 
   flags = X86EMU_RUN_LOOP | X86EMU_RUN_NO_CODE;
   if(opt.inst_max) {
@@ -1349,10 +1352,10 @@ void print_ptable_entry(int nr, ptable_t *ptable)
   if(ptable->valid) {
     lprintf(";     ");
     if(nr > 4 && is_ext_ptable(ptable)) {
-      lprintf("-");
+      lprintf("  -");
     }
     else {
-      lprintf("%d", nr);
+      lprintf("%3d", nr);
     }
 
     u = opt.show.rawptable ? 0 : ptable->base;
@@ -1423,7 +1426,8 @@ void dump_ptable(x86emu_t *emu, unsigned disk)
     if(!link_count++) {
       ext_base = ptable_ext->start.lin;
     }
-    if(link_count > 100) {
+    // arbitrary, but we don't want to loop forever
+    if(link_count > 10000) {
       lprintf(";    too many partitions\n");
       break;
     }
