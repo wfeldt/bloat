@@ -8,6 +8,7 @@
 #include <stdarg.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -20,6 +21,13 @@
 #define FIRST_CDROM	0xe0
 #define MAX_DISKS	0x100
 
+typedef struct {
+  unsigned char scan;
+  unsigned char ascii;
+  char *name;
+} bios_key_t;
+
+#include "bios_keys.h"
 
 typedef struct {
   unsigned type;
@@ -85,7 +93,7 @@ ptable_t *find_ext_ptable(ptable_t *ptable, int entries);
 void dump_ptable(x86emu_t *emu, unsigned disk);
 char *get_screen(x86emu_t *emu);
 void dump_screen(x86emu_t *emu);
-
+unsigned next_bios_key(char **keys);
 
 
 struct option options[] = {
@@ -100,6 +108,7 @@ struct option options[] = {
   { "no-feature", 1, NULL, 1008 },
   { "max",        1, NULL, 1009 },
   { "log-size",   1, NULL, 1010 },
+  { "keys",       1, NULL, 1011 },
   { }
 };
 
@@ -134,6 +143,7 @@ struct {
   } feature;
 
   FILE *log_file;
+  char *keyboard;
 } opt;
 
 
@@ -303,6 +313,10 @@ int main(int argc, char **argv)
         opt.log_size = strtoul(optarg, NULL, 0);
         break;
 
+      case 1011:
+        opt.keyboard = optarg;
+        break;
+
       default:
         help();
         return i == 'h' ? 0 : 1;
@@ -462,6 +476,8 @@ void help()
     "      features to disable (see --features)\n"
     "  --max N\n"
     "      stop after N instructions\n"
+    "  --key STRING\n"
+    "      use STRING as keyboard input\n"
     "  --log-size N\n"
     "      internal log buffer size\n"
     "  --help\n"
@@ -514,6 +530,15 @@ int check_ip(x86emu_t *emu)
 
   if(u >= vm->bios.iv_base && u < vm->bios.iv_base + 0x100) {
     handle_int(emu, u - vm->bios.iv_base);
+  }
+
+  if(
+    emu->x86.R_EIP < 0x1000 &&
+    x86emu_read_word(emu, u) == 0x1c75 &&		// jnz gfx_init_10
+    x86emu_read_dword(emu, u + 2) == 0xf50073f5		// cmc ; jnc $ + 2 ; cmc
+  ) {
+    x86emu_log(emu, "# gfxboot init detected -- aborting\n");
+    emu->x86.R_EIP += 2;
   }
 
   return 0;
@@ -995,14 +1020,14 @@ int do_int_16(x86emu_t *emu)
     case 0x00:
     case 0x10:
       x86emu_log(emu, "; int 0x16: ah 0x%02x (get key)\n", emu->x86.R_AH);
-      emu->x86.R_AX = vm->key ?: 0x1c0d;
+      emu->x86.R_AX = vm->key ?: next_bios_key(&opt.keyboard);
+      if(!vm->key) {
+        // we should rather stop here
+        x86emu_log(emu, "; blocking key read - stopped\n");
+        stop = 1;
+      }
       vm->key = 0;
-
-#if 0
-      // we should rather stop here
-      x86emu_log(emu, "; blocking key read - stopped\n");
-      stop = 1;
-#endif
+      vm->kbd_cnt = 0;
       break;
 
     case 0x01:
@@ -1010,10 +1035,11 @@ int do_int_16(x86emu_t *emu)
       x86emu_log(emu, "; int 0x16: ah 0x%02x (check for key)\n", emu->x86.R_AH);
       vm->kbd_cnt++;
 
-      if(vm->kbd_cnt % 4) {
+      if(vm->key || ((vm->kbd_cnt % 4) == 3)) {
         X86EMU_CLEAR_FLAG(emu, F_ZF);
-        vm->key = 0x1c0d;
+        vm->key = vm->key ?: next_bios_key(&opt.keyboard);
         emu->x86.R_AX = vm->key;
+        if(!vm->key) X86EMU_SET_FLAG(emu, F_ZF);
       }
       else {
         X86EMU_SET_FLAG(emu, F_ZF);
@@ -1479,6 +1505,66 @@ char *get_screen(x86emu_t *emu)
 void dump_screen(x86emu_t *emu)
 {
   lprintf("; - - - screen\n%s; - - -\n", get_screen(emu));
+}
+
+
+unsigned next_bios_key(char **keys)
+{
+  char *s, buf[3];
+  unsigned char uc;
+  unsigned k = 0, u, n;
+
+  if(!keys || !*keys || !**keys) return k;
+
+  if(**keys == '[') {
+    (*keys)++;
+    s = strchr(*keys, ']');
+    if(s) {
+      n = s - *keys;
+      s++;
+      for(u = 0; u < sizeof bios_key_list / sizeof *bios_key_list; u++) {
+        if(!strncmp(bios_key_list[u].name, *keys, n)) {
+          k = (bios_key_list[u].scan << 8) + bios_key_list[u].ascii;
+          break;
+        }
+      }
+    }
+    *keys = s;
+
+    // fprintf(stderr, "key >0x%04x<\n", k);
+
+    return k;
+  }
+
+  uc = *(*keys)++;
+
+  if(uc == '\\') {
+    s = *keys;
+    if(*s == 'x' && isxdigit(s[1]) && isxdigit(s[2])) {
+      buf[0] = s[1];
+      buf[1] = s[2];
+      buf[2] = 0;
+      *keys += 3;
+      uc = strtoul(buf, NULL, 16);
+    }
+    else {
+     uc = *s;
+     (*keys)++;
+    }
+  }
+
+  k = uc;
+
+  for(u = 0; u < sizeof bios_key_list / sizeof *bios_key_list; u++) {
+    if(bios_key_list[u].ascii == uc) {
+      k = (bios_key_list[u].scan << 8) + uc;
+      break;
+    }
+  }
+
+  // fprintf(stderr, "key >0x%04x<\n", k);
+
+  return k;
 }
 
 
