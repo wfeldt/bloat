@@ -8,7 +8,7 @@ MAJOR_VERSION	:= $(shell cut -d . -f 1 VERSION)
 
 all: bloat
 
-bloat: bloat.c bios_keys.h
+bloat: bloat.c bios_keys.h uni.h
 	$(CC) $(CFLAGS) $< -lx86emu -o $@
 
 install: bloat

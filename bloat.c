@@ -21,6 +21,8 @@
 #define FIRST_CDROM	0xe0
 #define MAX_DISKS	0x100
 
+#include "uni.h"
+
 typedef struct {
   unsigned char scan;
   unsigned char ascii;
@@ -52,6 +54,19 @@ typedef struct {
   unsigned memsize;	// in MB
 
   unsigned a20:1;
+  unsigned maybe_linux_kernel:1;
+  unsigned is_linux_kernel:1;
+
+  struct {
+    char version[0x100];
+    char cmdline[0x1000];
+    unsigned loader_id;
+    unsigned boot_proto;
+    unsigned code_start;
+    unsigned initrd_start;
+    unsigned initrd_length;
+    unsigned cmdline_start;
+  } kernel;
 
   struct {
     unsigned iv_base;
@@ -82,6 +97,7 @@ int do_int_13(x86emu_t *emu);
 int do_int_15(x86emu_t *emu);
 int do_int_16(x86emu_t *emu);
 int do_int_19(x86emu_t *emu);
+int do_int_1a(x86emu_t *emu);
 void prepare_bios(vm_t *vm);
 void prepare_boot(x86emu_t *emu);
 int disk_read(x86emu_t *emu, unsigned addr, unsigned disk, uint64_t sector, unsigned cnt, int log);
@@ -524,21 +540,92 @@ unsigned cs2c(unsigned cs)
 int check_ip(x86emu_t *emu)
 {
   vm_t *vm = emu->private;
-  unsigned u;
+  unsigned eip, u1, v;
 
-  u = emu->x86.R_CS_BASE + emu->x86.R_EIP;
+  eip = emu->x86.R_CS_BASE + emu->x86.R_EIP;
 
-  if(u >= vm->bios.iv_base && u < vm->bios.iv_base + 0x100) {
-    handle_int(emu, u - vm->bios.iv_base);
+  if(eip >= vm->bios.iv_base && eip < vm->bios.iv_base + 0x100) {
+    handle_int(emu, eip - vm->bios.iv_base);
+
+    return 0;
   }
+
+  if(vm->maybe_linux_kernel) {
+    if(
+      emu->x86.R_EIP < 0x1000 &&
+      x86emu_read_word(emu, eip) == 0x8166 &&		// cmp dword [????],0x5a5aaa55
+      x86emu_read_dword(emu, eip + 5) == 0x5a5aaa55 &&
+      x86emu_read_dword(emu, emu->x86.R_CS_BASE + 0x202) == 0x53726448	// "HdrS"
+    ) {
+      // very likely we are starting a linux kernel
+      vm->is_linux_kernel = 1;
+
+      vm->kernel.loader_id = x86emu_read_byte(emu, emu->x86.R_CS_BASE + 0x210);
+      vm->kernel.boot_proto = x86emu_read_word(emu, emu->x86.R_CS_BASE + 0x206);
+
+      vm->kernel.code_start = x86emu_read_dword(emu, emu->x86.R_CS_BASE + 0x214);
+      vm->kernel.initrd_start = x86emu_read_dword(emu, emu->x86.R_CS_BASE + 0x218);
+      vm->kernel.initrd_length = x86emu_read_dword(emu, emu->x86.R_CS_BASE + 0x21c);
+
+      vm->kernel.cmdline_start = x86emu_read_dword(emu, emu->x86.R_CS_BASE + 0x228);
+
+      u1 = emu->x86.R_CS_BASE + x86emu_read_word(emu, emu->x86.R_CS_BASE + 0x20e) + 0x200;
+      for(v = 0; v < sizeof vm->kernel.version - 1; v++) {
+        if(!(vm->kernel.version[v] = x86emu_read_byte(emu, u1 + v))) break;
+      }
+      vm->kernel.version[v] = 0;
+
+      for(v = 0; v < sizeof vm->kernel.cmdline - 1; v++) {
+        if(!(vm->kernel.cmdline[v] = x86emu_read_byte(emu, vm->kernel.cmdline_start + v))) break;
+      }
+      vm->kernel.cmdline[v] = 0;
+
+      x86emu_log(emu, "; linux kernel version = \"%s\"\n", vm->kernel.version);
+      x86emu_log(emu, ";   boot proto = %u.%u, loader id = 0x%02x\n",
+        vm->kernel.boot_proto >> 8, vm->kernel.boot_proto & 0xff,
+        vm->kernel.loader_id
+      );
+      x86emu_log(emu, ";   code start = 0x%08x, initrd start = 0x%08x, length = 0x%08x\n",
+        vm->kernel.code_start,
+        vm->kernel.initrd_start, vm->kernel.initrd_length
+      );
+      x86emu_log(emu, ";   cmdline start = 0x%08x\n", vm->kernel.cmdline_start);
+      x86emu_log(emu, ";   cmdline = \"%s\"\n", vm->kernel.cmdline);
+      x86emu_log(emu, "# bzImage kernel start detected -- stopping\n");
+
+      return 1;
+    }
+  }
+
+  vm->maybe_linux_kernel = 0;
 
   if(
     emu->x86.R_EIP < 0x1000 &&
-    x86emu_read_word(emu, u) == 0x1c75 &&		// jnz gfx_init_10
-    x86emu_read_dword(emu, u + 2) == 0xf50073f5		// cmc ; jnc $ + 2 ; cmc
+    x86emu_read_word(emu, eip) == 0x1c75 &&		// jnz gfx_init_10
+    x86emu_read_dword(emu, eip + 2) == 0xf50073f5		// cmc ; jnc $ + 2 ; cmc
   ) {
     x86emu_log(emu, "# gfxboot init detected -- aborting\n");
     emu->x86.R_EIP += 2;
+  }
+  else if(
+    emu->x86.R_EIP < 0x200 &&
+    x86emu_read_byte(emu, eip) == 0xcb &&			// retf
+    x86emu_read_word(emu, eip + 1) == 0x8166 &&		// cmp dword [????],0x5a5aaa55
+    x86emu_read_dword(emu, eip + 6) == 0x5a5aaa55
+  ) {
+    vm->maybe_linux_kernel = 1;
+  }
+  else if(
+    emu->x86.R_EIP == 0 &&
+    eip == 0x90200 &&
+    x86emu_read_dword(emu, 0x90000) == 0x8e07c0b8 &&
+    x86emu_read_dword(emu, 0x90004) == 0x9000b8d8
+  ) {
+    vm->is_linux_kernel = 1;
+
+    x86emu_log(emu, "# zImage kernel start detected -- stopping\n");
+
+    return 1;
   }
 
   return 0;
@@ -1065,6 +1152,30 @@ int do_int_19(x86emu_t *emu)
 }
 
 
+int do_int_1a(x86emu_t *emu)
+{
+  // vm_t *vm = emu->private;
+  unsigned t;
+
+  switch(emu->x86.R_AH) {
+    case 0x00:
+      x86emu_log(emu, "; int 0x1a: ah 0x%02x (get system time)\n", emu->x86.R_AH);
+      t = x86emu_read_dword(emu, 0x46c);
+      x86emu_write_dword(emu, 0x46c, ++t);
+      emu->x86.R_DX = t;
+      emu->x86.R_CX = t >> 16;
+      x86emu_log(emu, "; time = 0x%08x\n", t);
+      break;
+
+    default:
+      x86emu_log(emu, "; int 0x1a: ah 0x%02x\n", emu->x86.R_AH);
+      break;
+  }
+
+  return 0;
+}
+
+
 vm_t *vm_new()
 {
   vm_t *vm;
@@ -1179,6 +1290,10 @@ void prepare_bios(vm_t *vm)
   x86emu_write_word(emu, 0x19*4, 0x100 + 0x19);
   x86emu_write_word(emu, 0x19*4+2, 0xf800);
   vm->bios.iv_funcs[0x19] = do_int_19;
+
+  x86emu_write_word(emu, 0x1a*4, 0x100 + 0x1a);
+  x86emu_write_word(emu, 0x1a*4+2, 0xf800);
+  vm->bios.iv_funcs[0x1a] = do_int_1a;
 }
 
 
@@ -1486,7 +1601,6 @@ char *get_screen(x86emu_t *emu)
     for(x = 0; x < 80; x++) {
       u = x86emu_read_byte_noperm(emu, base + 2 * x);
       if(u < 0x20) u = ' ';
-      if(u >= 0x7f) u = '?';
       s_l[x] = u;
     }
     s_l[x] = 0;
@@ -1504,7 +1618,13 @@ char *get_screen(x86emu_t *emu)
 
 void dump_screen(x86emu_t *emu)
 {
-  lprintf("; - - - screen\n%s; - - -\n", get_screen(emu));
+  unsigned char *s = (unsigned char *) get_screen(emu);
+
+  lprintf("; - - - screen\n");
+  while(*s) {
+    lprintf("%s", cp437[*s++]);
+  }
+  lprintf("; - - -\n");
 }
 
 
