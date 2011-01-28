@@ -101,6 +101,7 @@ int do_int_1a(x86emu_t *emu);
 void prepare_bios(vm_t *vm);
 void prepare_boot(x86emu_t *emu);
 int disk_read(x86emu_t *emu, unsigned addr, unsigned disk, uint64_t sector, unsigned cnt, int log);
+int disk_write(x86emu_t *emu, unsigned addr, unsigned disk, uint64_t sector, unsigned cnt, int log);
 void parse_ptable(x86emu_t *emu, unsigned addr, ptable_t *ptable, unsigned base, unsigned ext_base, int entries);
 int guess_geo(ptable_t *ptable, int entries, unsigned *s, unsigned *h);
 void print_ptable_entry(int nr, ptable_t *ptable);
@@ -890,6 +891,26 @@ int do_int_13(x86emu_t *emu)
       emu->x86.R_CX = ((u >> 8) << 6) + ((u & 0xff) << 8) + opt.disk[disk].sectors;
       break;
 
+    case 0x15:
+      x86emu_log(emu, "; int 0x13: ah 0x%02x (get disk type)\n", emu->x86.R_AH);
+      disk = emu->x86.R_DL;
+      x86emu_log(emu, "; drive 0x%02x\n", disk);
+      X86EMU_CLEAR_FLAG(emu, F_CF);
+      if(
+        disk >= MAX_DISKS ||
+        !opt.disk[disk].dev ||
+        !opt.disk[disk].sectors ||
+        !opt.disk[disk].heads
+      ) {
+        emu->x86.R_AH = 0x00;
+      }
+      else {
+        emu->x86.R_AH = 3;
+        emu->x86.R_DX = opt.disk[disk].sectors;
+        emu->x86.R_CX = opt.disk[disk].sectors >> 16;
+      }
+      break;
+
     case 0x41:
       x86emu_log(emu, "; int 0x13: ah 0x%02x (edd install check)\n", emu->x86.R_AH);
       disk = emu->x86.R_DL;
@@ -937,6 +958,46 @@ int do_int_13(x86emu_t *emu)
         cnt <<= 2;
       }
       i = disk_read(emu, u, disk, ul, cnt, 1);
+      if(i) {
+        emu->x86.R_AH = 0x04;
+        X86EMU_SET_FLAG(emu, F_CF);
+        break;
+      }
+      emu->x86.R_AH = 0;
+      X86EMU_CLEAR_FLAG(emu, F_CF);
+      break;
+
+    case 0x43:
+      x86emu_log(emu, "; int 0x13: ah 0x%02x (edd disk write)\n", emu->x86.R_AH);
+      disk = emu->x86.R_DL;
+      addr = (emu->x86.R_DS << 4) + emu->x86.R_SI;
+      x86emu_log(emu, "; drive 0x%02x, request packet:\n; 0x%05x:", disk, addr);
+      j = x86emu_read_byte(emu, addr);
+      j = j == 0x10 || j == 0x18 ? j : 0x10;
+      for(i = 0; i < j; i++) x86emu_log(emu, " %02x", x86emu_read_byte(emu, addr + i));
+      x86emu_log(emu, "\n");
+      if(
+        !opt.feature.edd || disk >= MAX_DISKS || !opt.disk[disk].dev ||
+        (x86emu_read_byte(emu, addr) != 0x10 && x86emu_read_byte(emu, addr) != 0x18)
+      ) {
+        emu->x86.R_AH = 1;
+        X86EMU_SET_FLAG(emu, F_CF);
+        break;
+      }
+      cnt = x86emu_read_word(emu, addr + 2);
+      u = x86emu_read_dword(emu, addr + 4);
+      ul = vm_read_qword(emu, addr + 8);
+      if(x86emu_read_byte(emu, addr) == 0x18 && u == 0xffffffff) {
+        u = x86emu_read_dword(emu, addr + 0x10);
+      }
+      else {
+        u = vm_read_segofs16(emu, addr + 4);
+      }
+      if(disk >= FIRST_CDROM) {		/* sector size 2k */
+        ul <<= 2;
+        cnt <<= 2;
+      }
+      i = disk_write(emu, u, disk, ul, cnt, 1);
       if(i) {
         emu->x86.R_AH = 0x04;
         X86EMU_SET_FLAG(emu, F_CF);
@@ -1248,7 +1309,8 @@ void prepare_bios(vm_t *vm)
   x86emu_set_seg_register(vm->emu, vm->emu->x86.R_CS_SEL, 0);
   vm->emu->x86.R_EIP = 0x7c00;
 
-  x86emu_write_word(emu, 0x413, 640);	// mem size in kB
+  x86emu_write_word(emu, 0x413, 640);		// mem size in kB
+  x86emu_write_word(emu, 0x417, 0);		// kbd status flags
   x86emu_write_byte(emu, 0x449, 3);		// video mode
   x86emu_write_byte(emu, 0x44a, 80);		// columns
   x86emu_write_byte(emu, 0x484, 24);		// rows - 1
@@ -1390,6 +1452,26 @@ int disk_read(x86emu_t *emu, unsigned addr, unsigned disk, uint64_t sector, unsi
   }
 
   free(buf);
+
+  if(log) x86emu_log(emu, "ok\n");
+
+  return 0;
+}
+
+
+int disk_write(x86emu_t *emu, unsigned addr, unsigned disk, uint64_t sector, unsigned cnt, int log)
+{
+  if(log) x86emu_log(emu, "; write: disk 0x%02x, sector %llu (%u) @ 0x%05x - ",
+    disk, (unsigned long long) sector, cnt, addr
+  );
+
+  if(disk >= MAX_DISKS || !opt.disk[disk].dev) {
+    if(log) x86emu_log(emu, "invalid disk\n");
+    return 2;
+  }
+
+  // do someting...
+
 
   if(log) x86emu_log(emu, "ok\n");
 
