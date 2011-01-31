@@ -1,1 +1,8 @@
 BLOAT - boot loader test program
+--------------------------------
+
+Program is still in a very early stage. For a quick test try this with a
+openSUSE install CD:
+
+bloat --cdrom test.iso --key 'linux[enter]' -v
+
