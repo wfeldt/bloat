@@ -1062,7 +1062,8 @@ int do_int_13(x86emu_t *emu)
 int do_int_15(x86emu_t *emu)
 {
   vm_t *vm = emu->private;
-  unsigned u, u1;
+  unsigned u, u1, mem_type;
+  uint64_t mem_start, mem_size;
 
   switch(emu->x86.R_AH) {
     case 0x24:
@@ -1112,7 +1113,8 @@ int do_int_15(x86emu_t *emu)
       x86emu_log(emu, "; int 0x15: ah 0x%02x (ext. mem size)\n", emu->x86.R_AH);
       u = vm->memsize - 1;
       x86emu_log(emu, "; ext mem size: %u MB\n", u);
-      emu->x86.R_AX = u;
+      if(u > 15) u = 15;
+      emu->x86.R_AX = u << 10;
       X86EMU_CLEAR_FLAG(emu, F_CF);
       break;
 
@@ -1131,17 +1133,41 @@ int do_int_15(x86emu_t *emu)
         X86EMU_CLEAR_FLAG(emu, F_CF);
       }
       if(emu->x86.R_AL == 0x20 && emu->x86.R_EDX == 0x534d4150) {
-        x86emu_log(emu, "; int 0x15: ax 0x%04x (mem map (new))\n", emu->x86.R_AX);
-        u = vm->memsize;
-        if(emu->x86.R_EBX == 0) {
-          emu->x86.R_EAX = 0x534d4150;
-          emu->x86.R_EBX = 0;
+        x86emu_log(emu, "; int 0x15: ax 0x%04x (mem map)\n", emu->x86.R_AX);
+        emu->x86.R_EAX = 0x534d4150;
+        u1 = emu->x86.R_ES_BASE + emu->x86.R_DI;
+        mem_type = 0;
+        switch(emu->x86.R_EBX) {
+          case 0:
+            mem_type = 1;
+            mem_start = 0;
+            mem_size = x86emu_read_word(emu, 0x413) << 10;
+            break;
+
+          case 20:
+            mem_type = 2;
+            mem_start = x86emu_read_word(emu, 0x413) << 10;
+            mem_size = (1 << 20) - mem_start;
+            break;
+
+          case 40:
+            mem_type = 1;
+            mem_start = 1 << 20;
+            mem_size = (vm->memsize - 1) << 20;
+            break;
+        }
+        if(mem_type) {
+          emu->x86.R_EBX += 20;
+          if(emu->x86.R_EBX == 60) emu->x86.R_EBX = 0;
           emu->x86.R_ECX = 20;
-          u1 = emu->x86.R_ES_BASE + emu->x86.R_DI;
-          vm_write_qword(emu, u1, 0);
-          vm_write_qword(emu, u1 + 8, (uint64_t) u << 20);
-          x86emu_write_dword(emu, u1 + 0x10, 1);
-          x86emu_log(emu, "; mem size: %u MB\n", u);
+          vm_write_qword(emu, u1, mem_start);
+          vm_write_qword(emu, u1 + 8, mem_size);
+          x86emu_write_dword(emu, u1 + 0x10, mem_type);
+          x86emu_log(emu, "; mem map: 0x%016llx - 0x%016llx, type %u\n",
+            (unsigned long long) mem_start,
+            (unsigned long long) (mem_start + mem_size),
+            mem_type
+          );
           X86EMU_CLEAR_FLAG(emu, F_CF);
         }
         else {
