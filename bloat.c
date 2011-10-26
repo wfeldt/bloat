@@ -1194,7 +1194,10 @@ int do_int_16(x86emu_t *emu)
     case 0x00:
     case 0x10:
       x86emu_log(emu, "; int 0x16: ah 0x%02x (get key)\n", emu->x86.R_AH);
-      emu->x86.R_AX = vm->key ?: next_bios_key(&opt.keyboard);
+      // fprintf(stderr, "opt.keyboard = \"%s\" (block), vm->key = 0x%04x\n", opt.keyboard, vm->key);
+      vm->key = vm->key ?: next_bios_key(&opt.keyboard);
+      // fprintf(stderr, "vm->key = 0x%04x\n", vm->key);
+      emu->x86.R_AX = vm->key;
       if(!vm->key) {
         // we should rather stop here
         x86emu_log(emu, "; blocking key read - stopped\n");
@@ -1211,7 +1214,9 @@ int do_int_16(x86emu_t *emu)
 
       if(vm->key || ((vm->kbd_cnt % 4) == 3)) {
         X86EMU_CLEAR_FLAG(emu, F_ZF);
+        // fprintf(stderr, "opt.keyboard = \"%s\" (no block)\n", opt.keyboard);
         vm->key = vm->key ?: next_bios_key(&opt.keyboard);
+        // fprintf(stderr, "vm->key = 0x%04x\n", vm->key);
         emu->x86.R_AX = vm->key;
         if(!vm->key) X86EMU_SET_FLAG(emu, F_ZF);
       }
@@ -1742,6 +1747,8 @@ unsigned next_bios_key(char **keys)
   unsigned char uc;
   unsigned k = 0, u, n;
 
+  // fprintf(stderr, "next_bios_key(\"%s\")\n", *keys);
+
   if(!keys || !*keys || !**keys) return k;
 
   if(**keys == '[') {
@@ -1759,7 +1766,7 @@ unsigned next_bios_key(char **keys)
     }
     *keys = s;
 
-    // fprintf(stderr, "key >0x%04x<\n", k);
+    // fprintf(stderr, "key = 0x%04x\n", k);
 
     return k;
   }
@@ -1790,7 +1797,7 @@ unsigned next_bios_key(char **keys)
     }
   }
 
-  // fprintf(stderr, "key >0x%04x<\n", k);
+  // fprintf(stderr, "key = 0x%04x\n", k);
 
   return k;
 }
