@@ -1036,14 +1036,59 @@ int do_int_13(x86emu_t *emu)
       break;
 
     case 0x4b:
-      x86emu_log(emu, "; int 0x13: ax 0x%04x (terminate disk emulation)\n", emu->x86.R_AX);
-      if(emu->x86.R_AL == 1) {
-        emu->x86.R_AH = 0x01;
-        X86EMU_SET_FLAG(emu, F_CF);
-      }
-      else {
-        emu->x86.R_AH = 0x01;
-        X86EMU_SET_FLAG(emu, F_CF);
+      disk = emu->x86.R_DL;
+      addr = (emu->x86.R_DS << 4) + emu->x86.R_SI;
+      switch(emu->x86.R_AL) {
+        case 0:
+        case 1:
+          if(emu->x86.R_AL) {
+            x86emu_log(emu, "; int 0x13: ax 0x%04x (get disk emulation status)\n", emu->x86.R_AX);
+          }
+          else {
+            x86emu_log(emu, "; int 0x13: ax 0x%04x (terminate disk emulation)\n", emu->x86.R_AX);
+          }
+
+          if(
+            disk < MAX_DISKS && disk >= FIRST_CDROM &&
+            opt.disk[disk].dev &&
+            x86emu_read_byte(emu, addr) >= 0x13
+          ) {
+            emu->x86.R_AH = 0x00;
+            X86EMU_CLEAR_FLAG(emu, F_CF);
+            x86emu_write_byte(emu, addr + 1, 0);	// no emulation
+            x86emu_write_byte(emu, addr + 2, disk);	// disk number
+            x86emu_write_byte(emu, addr + 3, 0);	// controller index
+            x86emu_write_dword(emu, addr + 4, 0);	// image start
+            x86emu_write_word(emu, addr + 8, 0);	// device number
+            x86emu_write_word(emu, addr + 10, 0);	// buffer segment
+            x86emu_write_word(emu, addr + 12, 0);	// load segment
+            x86emu_write_word(emu, addr + 14, 0);	// load sector count
+            u = opt.disk[disk].cylinders;
+            x86emu_write_byte(emu, addr + 16, u);	// cylindes/low
+            u = ((u >> 8) << 6) + opt.disk[disk].sectors;
+            x86emu_write_byte(emu, addr + 17, u);	// sectors+cylindes/high
+            u = opt.disk[disk].heads - 1;
+            x86emu_write_byte(emu, addr + 18, u);	// heads-1
+
+            if(emu->x86.R_AL == 0) opt.disk[disk].dev = NULL;
+          }
+          else {
+            emu->x86.R_AH = 0x01;
+            X86EMU_SET_FLAG(emu, F_CF);
+          }
+
+          x86emu_log(emu, "; drive 0x%02x, request packet:\n; 0x%05x:", disk, addr);
+          j = x86emu_read_byte(emu, addr);
+          for(i = 0; i < j; i++) x86emu_log(emu, " %02x", x86emu_read_byte(emu, addr + i));
+          x86emu_log(emu, "\n");
+
+          break;
+
+        default:
+          x86emu_log(emu, "; int 0x13: ax 0x%04x (invalid function)\n", emu->x86.R_AX);
+          emu->x86.R_AH = 0x01;
+          X86EMU_SET_FLAG(emu, F_CF);
+          break;
       }
       break;
 
