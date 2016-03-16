@@ -100,6 +100,7 @@ int do_int_19(x86emu_t *emu);
 int do_int_1a(x86emu_t *emu);
 void prepare_bios(vm_t *vm);
 void prepare_boot(x86emu_t *emu);
+int file_read(x86emu_t *emu, unsigned addr, char *name, int log);
 int disk_read(x86emu_t *emu, unsigned addr, unsigned disk, uint64_t sector, unsigned cnt, int log);
 int disk_write(x86emu_t *emu, unsigned addr, unsigned disk, uint64_t sector, unsigned cnt, int log);
 void parse_ptable(x86emu_t *emu, unsigned addr, ptable_t *ptable, unsigned base, unsigned ext_base, int entries);
@@ -126,6 +127,7 @@ struct option options[] = {
   { "max",        1, NULL, 1009 },
   { "log-size",   1, NULL, 1010 },
   { "keys",       1, NULL, 1011 },
+  { "bootcode",   1, NULL, 1012 },
   { }
 };
 
@@ -161,6 +163,8 @@ struct {
 
   FILE *log_file;
   char *keyboard;
+
+  char *boot_code;
 } opt;
 
 
@@ -334,6 +338,10 @@ int main(int argc, char **argv)
         opt.keyboard = optarg;
         break;
 
+      case 1012:
+        opt.boot_code = optarg;
+        break;
+
       default:
         help();
         return i == 'h' ? 0 : 1;
@@ -362,7 +370,7 @@ int main(int argc, char **argv)
     }
   }
 
-  if(!opt.disks && !opt.floppies && !opt.cdroms) {
+  if(!opt.disks && !opt.floppies && !opt.cdroms && !opt.boot_code) {
     fprintf(stderr, "we need some drives\n");
     return 1;
   }
@@ -479,6 +487,8 @@ void help()
     "      add floppy disk image [with geometry]\n"
     "  --cdrom device[,heads,sectors]\n"
     "      add cdrom image [with geometry]\n"
+    "  --bootcode FILE\n"
+    "      use FILE as bootloader (map at 0:7c00h and start)\n"
     "  --show LIST\n"
     "      Things to log. LIST is a comma-separated list of code, regs, data, acc,\n"
     "      io, ints, time, debug, dump.regs, dump.mem, dump.mem.acc, dump.mem.inv,\n"
@@ -1478,12 +1488,63 @@ int el_torito_boot(x86emu_t *emu, unsigned disk)
 
 void prepare_boot(x86emu_t *emu)
 {
-  if(opt.boot < FIRST_CDROM) {
+  if(opt.boot_code) {
+    file_read(emu, 0x7c00, opt.boot_code, 1);
+  }
+  else if(opt.boot < FIRST_CDROM) {
     disk_read(emu, 0x7c00, opt.boot, 0, 1, 1);
   }
   else {
     el_torito_boot(emu, opt.boot);
   }
+}
+
+
+int file_read(x86emu_t *emu, unsigned addr, char *name, int log)
+{
+  off_t ofs;
+  unsigned char *buf;
+  unsigned u;
+  int fd;
+
+  fd = open(name, O_RDONLY | O_LARGEFILE);
+  if(fd == -1) {
+    if(log) x86emu_log(emu, "%s: error opening file\n", name);
+    return 1;
+  }
+
+  ofs = lseek(fd, 0, SEEK_END);
+  lseek(fd, 0, SEEK_SET);
+
+  if(ofs == -1) {
+    if(log) x86emu_log(emu, "%s: seek error\n", name);
+    return 1;
+  }
+
+  if(log) x86emu_log(emu, "; read: %s, %u @ 0x%05x\n",
+    name, (unsigned) ofs, addr
+  );
+
+  buf = malloc(ofs);
+
+  if(read(fd, buf, ofs) != ofs) {
+    if(log) x86emu_log(emu, "read error\n");
+    free(buf);
+
+    return 5;
+  }
+
+  for(u = 0; u < ofs; u++) {
+    x86emu_write_byte(emu, addr + u, buf[u]);
+  }
+
+  free(buf);
+
+  close(fd);
+
+  if(log) x86emu_log(emu, "ok\n");
+
+  return 0;
 }
 
 
